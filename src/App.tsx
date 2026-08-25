@@ -1,15 +1,23 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import MainLayout from '@/layouts/MainLayout';
-import Onboarding from '@/pages/Onboarding';
-import Dashboard from '@/pages/Dashboard';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import AppLayout from '@/layouts/AppLayout';
+import NewRecommendation from '@/pages/NewRecommendation';
+import MyPortfolio from '@/pages/MyPortfolio';
+import Settings from '@/pages/Settings';
+import Login from '@/pages/auth/Login';
+import Signup from '@/pages/auth/Signup';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<MainLayout />}>
-          <Route path="/" element={<Onboarding />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<Navigate to="/portfolio" replace />} />
+          <Route path="/portfolio" element={<MyPortfolio />} />
+          <Route path="/generate" element={<NewRecommendation />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>
