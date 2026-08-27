@@ -7,6 +7,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ArrowRight, Activity, ArrowLeft } from "lucide-react";
 import type { FormData, RiskProfile } from "@/types";
 import questionsData from "@/data/questions.json";
+import { marketService } from "@/services/marketService";
 
 type QuestionType = "number" | "radio";
 
@@ -70,24 +71,47 @@ export default function NewRecommendation() {
     return "Agresif";
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step < totalSteps - 1) {
       setStep(step + 1);
     } else {
-      handleSubmit();
+      await handleSubmit();
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setIsSubmitting(true);
-    // Simulate AI / GA processing time
-    setTimeout(() => {
+
+    // Membentuk data lengkap (termasuk score) untuk dikirim ke Backend/GA
+    const finalPayload: Record<string, { value: string; score?: number }> = {};
+
+    questionnaireJson.forEach((q) => {
+      const answerValue = answers[q.id];
+      if (q.type === "radio" && q.options) {
+        const selectedOption = q.options.find((o) => o.value === answerValue);
+        finalPayload[q.id] = {
+          value: answerValue,
+          score: selectedOption?.score,
+        };
+      } else {
+        finalPayload[q.id] = { value: answerValue };
+      }
+    });
+
+    // Anda bisa melihat hasil payload lengkapnya di console browser
+    console.log(
+      "Data yang akan dikirim ke Backend Algoritma Genetika:",
+      finalPayload,
+    );
+
+    try {
+      const filteredStocks = await marketService.filterStocks();
+      console.log("Filtered Stocks:", filteredStocks);
+    } catch (error) {
+      console.error("Error filtering stocks:", error);
+    } finally {
       setIsSubmitting(false);
-      const riskProfile = calculateRiskProfile();
-      navigate("/portfolio", {
-        state: { formData: answers as FormData, riskProfile },
-      });
-    }, 2000);
+    }
   };
 
   const isCurrentStepValid = () => {
