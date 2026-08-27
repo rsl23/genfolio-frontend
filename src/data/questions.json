@@ -1,0 +1,179 @@
+[
+  {
+    "id": "capital",
+    "type": "number",
+    "stepLabel": "Modal",
+    "title": "Kapasitas Modal Investasi",
+    "subtitle": "Berapa total nominal dana yang siap Anda alokasikan untuk portofolio ini secara keseluruhan?",
+    "prefix": "Rp",
+    "placeholder": "50.000.000"
+  },
+  {
+    "id": "dropReaction",
+    "type": "radio",
+    "stepLabel": "Psikologi",
+    "title": "Evaluasi Psikologi Risiko",
+    "subtitle": "Jika nilai portofolio Anda tiba-tiba turun 15% dalam waktu singkat akibat koreksi pasar, apa reaksi utama Anda?",
+    "options": [
+      {
+        "value": "a",
+        "label": "Jual semua, hindari kerugian lebih lanjut.",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "Tahan (Hold), tunggu sampai pulih.",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "Tambah alokasi, anggap peluang beli murah (Averaging Down).",
+        "score": 3
+      }
+    ]
+  },
+  {
+    "id": "mainPriority",
+    "type": "radio",
+    "stepLabel": "Target",
+    "title": "Target & Tujuan Utama",
+    "subtitle": "Apa prioritas utama Anda dalam berinvestasi di pasar modal saat ini?",
+    "options": [
+      {
+        "value": "a",
+        "label": "Menjaga nilai uang dari inflasi (Aman).",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "Pertumbuhan yang seimbang dan stabil.",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "Memaksimalkan keuntungan (High Return), terima fluktuasi tinggi.",
+        "score": 3
+      }
+    ]
+  },
+  {
+    "id": "timeHorizon",
+    "type": "radio",
+    "stepLabel": "Waktu",
+    "title": "Horison Waktu Investasi",
+    "subtitle": "Berapa lama Anda berencana untuk menginvestasikan dana ini sebelum dicairkan?",
+    "options": [
+      {
+        "value": "a",
+        "label": "< 1 tahun",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "1 - 5 tahun",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "> 5 tahun",
+        "score": 3
+      }
+    ]
+  },
+  {
+    "id": "emergencyFund",
+    "type": "radio",
+    "stepLabel": "Keamanan",
+    "title": "Ketersediaan Dana Darurat",
+    "subtitle": "Berapa jumlah dana darurat yang Anda miliki di luar dana investasi ini?",
+    "options": [
+      {
+        "value": "a",
+        "label": "Tidak ada / kurang dari 3 bulan pengeluaran.",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "3 - 6 bulan pengeluaran.",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "Lebih dari 6 bulan pengeluaran.",
+        "score": 3
+      }
+    ]
+  },
+  {
+    "id": "wealthProportion",
+    "type": "radio",
+    "stepLabel": "Proporsi",
+    "title": "Proporsi Dana Investasi",
+    "subtitle": "Kira-kira berapa proporsi dana investasi ini dibandingkan dengan total kekayaan/tabungan Anda saat ini?",
+    "options": [
+      {
+        "value": "a",
+        "label": "Lebih dari 50% (dana penting/mendesak).",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "20% - 50%.",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "Kurang dari 20% (dana \"nganggur\").",
+        "score": 3
+      }
+    ]
+  },
+  {
+    "id": "withdrawalLikelihood",
+    "type": "radio",
+    "stepLabel": "Pencairan",
+    "title": "Kemungkinan Penarikan Dana",
+    "subtitle": "Seberapa besar kemungkinan Anda perlu menarik dana investasi ini dalam waktu dekat?",
+    "options": [
+      {
+        "value": "a",
+        "label": "Kemungkinan besar, untuk kebutuhan mendesak.",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "Mungkin, tergantung situasi.",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "Kecil kemungkinan, dana benar-benar untuk jangka panjang.",
+        "score": 3
+      }
+    ]
+  },
+  {
+    "id": "experience",
+    "type": "radio",
+    "stepLabel": "Pengalaman",
+    "title": "Pengalaman Investasi",
+    "subtitle": "Bagaimana tingkat pengalaman Anda berinvestasi di pasar saham?",
+    "options": [
+      {
+        "value": "a",
+        "label": "Belum pernah / baru mulai.",
+        "score": 1
+      },
+      {
+        "value": "b",
+        "label": "Pernah, beberapa tahun.",
+        "score": 2
+      },
+      {
+        "value": "c",
+        "label": "Berpengalaman, aktif bertahun-tahun.",
+        "score": 3
+      }
+    ]
+  }
+]

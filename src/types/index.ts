@@ -1,9 +1,7 @@
 export type RiskProfile = "Konservatif" | "Moderat" | "Agresif" | null;
 
-export interface FormData {
+export interface FormData extends Record<string, string> {
   capital: string;
-  dropReaction: string;
-  mainPriority: string;
 }
 
 export interface PortfolioData {
