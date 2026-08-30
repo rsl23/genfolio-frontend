@@ -13,10 +13,17 @@ export interface PortfolioData {
 }
 
 export interface FilteredStock {
-  ticker: string;
-  companyName?: string;
-  closePrice?: number;
-  // Tambahkan property lain yang sesuai dengan response dari backend FastAPI Anda
+  Kode: string;
+  Tanggal: Date;
+  Close: number;
+  ListedShares: number;
+  Volume_Hari_Ini: number;
+  Value_Hari_Ini: number;
+  High: number;
+  Low: number;
+  Frequency: number;
+  ForeignBuy: number;
+  ForeignSell: number;
 }
 
 export interface HistoricalData {

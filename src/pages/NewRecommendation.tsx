@@ -41,36 +41,6 @@ export default function NewRecommendation() {
   const totalSteps = questionnaireJson.length;
   const currentQuestion = questionnaireJson[step];
 
-  // Logic perhitungan dinamis berdasarkan total skor radio button
-  const calculateRiskProfile = (): RiskProfile => {
-    let totalScore = 0;
-    let maxPossibleScore = 0;
-
-    questionnaireJson.forEach((q) => {
-      if (q.type === "radio" && q.options) {
-        // Cari nilai maksimal skor dari pertanyaan ini
-        const maxScoreForQuestion = Math.max(
-          ...q.options.map((o) => o.score || 0),
-        );
-        maxPossibleScore += maxScoreForQuestion;
-
-        // Cari skor jawaban user
-        const selectedOption = q.options.find((o) => o.value === answers[q.id]);
-        if (selectedOption && selectedOption.score !== undefined) {
-          totalScore += selectedOption.score;
-        }
-      }
-    });
-
-    if (maxPossibleScore === 0) return "Konservatif"; // Fallback
-
-    const scorePercentage = totalScore / maxPossibleScore;
-
-    if (scorePercentage <= 0.33) return "Konservatif";
-    if (scorePercentage <= 0.66) return "Moderat";
-    return "Agresif";
-  };
-
   const handleNext = async () => {
     if (step < totalSteps - 1) {
       setStep(step + 1);
