@@ -33,19 +33,23 @@ export default function AppLayout() {
       {/* Sidebar Navigation (Drawer on Mobile, Static on Desktop) */}
       <aside
         className={`
-        fixed inset-y-0 left-0 z-30 w-64 bg-white border-r transform transition-transform duration-300 ease-in-out flex flex-col
+        fixed inset-y-0 left-0 z-30 w-64 bg-card border-r border-border transform transition-transform duration-300 ease-in-out flex flex-col
         md:relative md:translate-x-0
         ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"}
       `}
       >
-        <div className="flex items-center justify-between p-4 md:p-6 border-b">
-          <div className="flex items-center gap-2 font-bold text-xl text-blue-900">
-            <Briefcase className="w-6 h-6 text-blue-600" />
-            GenFolio
+        <div className="flex items-center justify-between p-4 md:p-6 border-b border-border">
+          <div className="flex items-center gap-2 text-xl text-blue-800">
+            <span className="grid place-items-center w-9 h-9 rounded-xl bg-blue-600 text-white shadow-btn">
+              <Briefcase className="w-5 h-5" />
+            </span>
+            <span className="font-heading font-bold tracking-tight">
+              GenFolio
+            </span>
           </div>
           <button
             onClick={() => setIsMobileMenuOpen(false)}
-            className="md:hidden text-slate-500 hover:bg-slate-100 p-1 rounded-md"
+            className="md:hidden text-muted-foreground hover:bg-muted p-1 rounded-md"
           >
             <X className="w-6 h-6" />
           </button>
@@ -58,10 +62,10 @@ export default function AppLayout() {
               to={item.path}
               onClick={() => setIsMobileMenuOpen(false)}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${
+                `flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
                   isActive
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                    ? "bg-blue-50 text-blue-700 border border-blue-100"
+                    : "text-slate-600 hover:bg-muted hover:text-slate-900 border border-transparent"
                 }`
               }
             >
@@ -71,21 +75,21 @@ export default function AppLayout() {
           ))}
         </nav>
 
-        <div className="p-4 border-t bg-slate-50/50">
+        <div className="p-4 border-t border-border bg-muted/40">
           <div className="flex items-center gap-3 px-4 py-3 mb-2">
-            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
+            <div className="w-8 h-8 rounded-full bg-blue-600 text-primary-foreground flex items-center justify-center font-bold text-sm shrink-0">
               RK
             </div>
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium text-slate-900 truncate">
                 Raoul Stanley
               </p>
-              <p className="text-xs text-slate-500 truncate">Investor</p>
+              <p className="text-xs text-muted-foreground truncate">Investor</p>
             </div>
           </div>
           <button
             onClick={() => navigate("/login")}
-            className="flex items-center gap-3 px-4 py-3 w-full rounded-xl font-medium text-red-600 hover:bg-red-50 transition-colors"
+            className="flex items-center gap-3 px-4 py-3 w-full rounded-lg font-medium text-destructive hover:bg-destructive/10 transition-colors"
           >
             <LogOut className="w-5 h-5 shrink-0" />
             Keluar
@@ -96,14 +100,18 @@ export default function AppLayout() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
         {/* Mobile Header (Hamburger) */}
-        <header className="md:hidden flex items-center justify-between bg-white border-b p-4 shadow-sm z-10">
-          <div className="flex items-center gap-2 font-bold text-lg text-blue-900">
-            <Briefcase className="w-5 h-5 text-blue-600" />
-            GenFolio
+        <header className="md:hidden flex items-center justify-between bg-card border-b border-border p-4 shadow-sm z-10">
+          <div className="flex items-center gap-2 text-lg text-blue-800">
+            <span className="grid place-items-center w-8 h-8 rounded-lg bg-blue-600 text-white">
+              <Briefcase className="w-5 h-5" />
+            </span>
+            <span className="font-heading font-bold tracking-tight">
+              GenFolio
+            </span>
           </div>
           <button
             onClick={() => setIsMobileMenuOpen(true)}
-            className="p-2 text-slate-600 hover:bg-slate-100 rounded-md"
+            className="p-2 text-slate-600 hover:bg-muted rounded-md"
           >
             <Menu className="w-6 h-6" />
           </button>

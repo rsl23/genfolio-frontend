@@ -43,7 +43,7 @@ import type {
   HistoricalData,
 } from "@/types";
 
-const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+const COLORS = ["#117a58", "#e0a83a", "#2b8a9a", "#c25b3a", "#8b5cf6"];
 
 const mockPortfolioData: PortfolioData[] = [
   { name: "BBCA", value: 50, lot: 401, price: 6225, total: 249622500 },
@@ -81,7 +81,7 @@ export default function Dashboard() {
     <div className="p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-500">
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-xl shadow-sm border">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-card p-6 rounded-xl shadow-card border border-border">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <Briefcase className="w-6 h-6 text-blue-600" />
@@ -169,7 +169,7 @@ export default function Dashboard() {
                       type="monotone"
                       dataKey="portfolio"
                       name="Portofolio Anda"
-                      stroke="#2563eb"
+                      stroke="#117a58"
                       strokeWidth={3}
                       dot={{ r: 4 }}
                     />
@@ -177,7 +177,7 @@ export default function Dashboard() {
                       type="monotone"
                       dataKey="ihsg"
                       name="IHSG"
-                      stroke="#f59e0b"
+                      stroke="#e0a83a"
                       strokeWidth={2}
                       dot={{ r: 4 }}
                     />

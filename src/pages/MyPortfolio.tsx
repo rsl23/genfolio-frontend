@@ -45,7 +45,7 @@ import type {
   HistoricalData,
 } from "@/types";
 
-const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+const COLORS = ["#117a58", "#e0a83a", "#2b8a9a", "#c25b3a", "#8b5cf6"];
 
 const mockPortfolioData: PortfolioData[] = [
   { name: "BBCA", value: 50, lot: 401, price: 6225, total: 249622500 },
@@ -216,25 +216,25 @@ export default function MyPortfolio() {
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
-                    stroke="#e2e8f0"
+                    stroke="#e7e0d3"
                   />
                   <XAxis
                     dataKey="year"
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#64748b" }}
+                    tick={{ fill: "#8c8f85" }}
                     dy={10}
                   />
                   <YAxis
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#64748b" }}
+                    tick={{ fill: "#8c8f85" }}
                     dx={-10}
                     tickFormatter={(val) => `${val}%`}
                   />
                   <RechartsTooltip
                     cursor={{
-                      stroke: "#cbd5e1",
+                      stroke: "#d8d0bf",
                       strokeWidth: 1,
                       strokeDasharray: "4 4",
                     }}
@@ -248,7 +248,7 @@ export default function MyPortfolio() {
                     type="monotone"
                     dataKey="portfolio"
                     name="Portofolio GA"
-                    stroke="#2563eb"
+                    stroke="#117a58"
                     strokeWidth={3}
                     dot={{ r: 4, strokeWidth: 2 }}
                     activeDot={{ r: 6 }}
@@ -257,7 +257,7 @@ export default function MyPortfolio() {
                     type="monotone"
                     dataKey="ihsg"
                     name="IHSG"
-                    stroke="#f59e0b"
+                    stroke="#e0a83a"
                     strokeWidth={2}
                     dot={{ r: 3 }}
                     activeDot={{ r: 5 }}
@@ -420,7 +420,7 @@ export default function MyPortfolio() {
                 </p>
               </div>
 
-              <div className="mt-8 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-start gap-3">
+              <div className="mt-8 bg-card p-4 rounded-xl border border-slate-200 shadow-sm flex items-start gap-3">
                 <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                 <p className="text-sm text-slate-600 leading-relaxed">
                   <strong className="text-slate-900 block mb-1">

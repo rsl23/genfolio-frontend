@@ -90,7 +90,7 @@ export default function NewRecommendation() {
   };
 
   return (
-    <div className="min-h-full bg-white rounded-2xl shadow-sm border p-4 md:p-8 lg:p-12">
+    <div className="min-h-full bg-card rounded-2xl shadow-card border border-border p-4 md:p-8 lg:p-12">
       <div className="max-w-3xl mx-auto">
         {/* Header Steps Dinamis */}
         <div className="mb-12">
@@ -143,7 +143,7 @@ export default function NewRecommendation() {
                         type="text"
                         inputMode="numeric"
                         placeholder={currentQuestion.placeholder}
-                        className={`text-xl h-14 bg-white ${currentQuestion.prefix ? "pl-12" : "pl-4"}`}
+                        className={`text-xl h-14 bg-card ${currentQuestion.prefix ? "pl-12" : "pl-4"}`}
                         // 2. Format nilai yang diambil dari state agar memiliki titik
                         value={
                           answers[currentQuestion.id]
@@ -182,7 +182,7 @@ export default function NewRecommendation() {
                         return (
                           <div
                             key={opt.value}
-                            className="flex items-center space-x-3 bg-white border p-5 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+                            className="flex items-center space-x-3 bg-card border border-border p-5 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
                           >
                             <RadioGroupItem
                               value={opt.value}
