@@ -10,14 +10,53 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Briefcase } from "lucide-react";
+import { Briefcase, AlertCircle } from "lucide-react";
+import { useState } from "react";
+import axios from "axios";
+import { authService } from "@/services/authService";
 
 export default function Login() {
   const navigate = useNavigate();
+  const [email, setemail] = useState("");
+  const [password, setpassword] = useState("");
+  const [loading, setloading] = useState(false);
+  const [error, seterror] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    navigate("/portfolio");
+    setloading(true);
+    seterror(null);
+
+    try {
+      await authService.login(email, password);
+
+      // ===== SUKSES: baru pindah ke /portfolio =====
+      navigate("/portfolio");
+    } catch (err) {
+      // Error dari backend (HTTPException / validasi FastAPI) masuk ke sini
+      if (axios.isAxiosError(err)) {
+        const data = err.response?.data as
+          | { detail?: string; message?: string }
+          | undefined;
+
+        if (data && typeof data.detail === "string") {
+          // HTTPException: detail = string (mis. 401 "Email atau password salah")
+          seterror(data.detail);
+        } else if (data && typeof data.message === "string") {
+          seterror(data.message);
+        } else if (err.response) {
+          seterror(
+            `Terjadi kesalahan pada server (kode ${err.response.status}).`,
+          );
+        } else {
+          seterror("Tidak dapat terhubung ke server. Coba lagi.");
+        }
+      } else {
+        seterror("Tidak dapat terhubung ke server. Coba lagi.");
+      }
+    } finally {
+      setloading(false);
+    }
   };
 
   return (
@@ -41,6 +80,14 @@ export default function Login() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {/* ===== Notifikasi ERROR ===== */}
+            {error && (
+              <div className="mb-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <p className="text-sm font-medium text-red-800">{error}</p>
+              </div>
+            )}
+
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
@@ -49,6 +96,8 @@ export default function Login() {
                   type="email"
                   placeholder="nama@email.com"
                   required
+                  value={email}
+                  onChange={(e) => setemail(e.target.value)}
                 />
               </div>
               <div className="space-y-2">
@@ -61,13 +110,20 @@ export default function Login() {
                     Lupa kata sandi?
                   </a>
                 </div>
-                <Input id="password" type="password" required />
+                <Input
+                  id="password"
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setpassword(e.target.value)}
+                />
               </div>
               <Button
                 type="submit"
                 className="w-full bg-blue-600 hover:bg-blue-700 h-11 text-base"
+                disabled={loading}
               >
-                Masuk
+                {loading ? "Memproses..." : "Masuk"}
               </Button>
             </form>
           </CardContent>
