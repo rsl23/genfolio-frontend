@@ -39,13 +39,20 @@ import {
 import type {
   FormData,
   RiskProfile,
-  PortfolioData,
   HistoricalData,
 } from "@/types";
 
 const COLORS = ["#117a58", "#e0a83a", "#2b8a9a", "#c25b3a", "#8b5cf6"];
 
-const mockPortfolioData: PortfolioData[] = [
+interface PortfolioItem {
+  name: string;
+  value: number;
+  lot: number;
+  price: number;
+  total: number;
+}
+
+const mockPortfolioData: PortfolioItem[] = [
   { name: "BBCA", value: 50, lot: 401, price: 6225, total: 249622500 },
   { name: "ICBP", value: 30, lot: 226, price: 6625, total: 149725000 },
   { name: "TLKM", value: 20, lot: 401, price: 2510, total: 100651000 },

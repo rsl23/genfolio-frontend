@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { authService } from "@/services/authService";
 import {
   Briefcase,
   LayoutDashboard,
@@ -88,7 +89,12 @@ export default function AppLayout() {
             </div>
           </div>
           <button
-            onClick={() => navigate("/login")}
+            onClick={() => {
+              // Hapus token dari localStorage SEBELUM pindah halaman,
+              // agar sesi benar-benar berakhir (bukan cuma pindah route)
+              authService.logout();
+              navigate("/login", { replace: true });
+            }}
             className="flex items-center gap-3 px-4 py-3 w-full rounded-lg font-medium text-destructive hover:bg-destructive/10 transition-colors"
           >
             <LogOut className="w-5 h-5 shrink-0" />

@@ -5,11 +5,29 @@ export interface FormData extends Record<string, string> {
 }
 
 export interface PortfolioData {
-  name: string;
-  value: number;
-  lot: number;
-  price: number;
-  total: number;
+  id: string;
+  fitness_score: number;
+  sharpe_ratio: number;
+  expected_return: number;
+  max_drawdown: number;
+  avg_correlation: number;
+  skor_fundamental: number;
+  total_terpakai: number;
+  sisa_budget: number;
+  n_active: number;
+  allocated_budget_ok: boolean;
+  risk_profile: string;
+  budget: number;
+  allocations: Array<PortofolioItem>;
+  narasi_llm: string;
+}
+
+export interface PortofolioItem {
+  ticker: string;
+  lots: number;
+  price_per_lot: number;
+  allocation: number;
+  weight: number;
 }
 
 export interface FilteredStock {
@@ -30,4 +48,17 @@ export interface HistoricalData {
   year: string;
   portfolio: number;
   ihsg: number;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface ApiResponse<T> {
+  status: "success" | "error";
+  message: string;
+  data: T;
 }
