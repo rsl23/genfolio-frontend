@@ -41,7 +41,6 @@ import {
 import type {
   FormData,
   RiskProfile,
-  PortfolioData,
   HistoricalData,
 } from "@/types";
 

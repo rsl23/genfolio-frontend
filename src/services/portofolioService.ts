@@ -15,10 +15,10 @@ export const portofolioService = {
     try {
       // Axios akan otomatis mengubah params menjadi query string
       const response = await apiClient.post<PortfolioData[]>(
-        "/api/v1/portofolios/generate",
+        "/api/v1/portfolios/generate",
         body,
       );
-      console.log("Response from /api/v1/portofolios/generate:", response.data);
+      console.log("Response from /api/v1/portfolios/generate:", response.data);
       return response.data;
     } catch (error) {
       // Lemparkan error ke komponen agar bisa ditampilkan ke UI

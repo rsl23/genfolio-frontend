@@ -7,7 +7,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ArrowRight, Activity, ArrowLeft } from "lucide-react";
 import type { FormData, RiskProfile } from "@/types";
 import questionsData from "@/data/questions.json";
-import { marketService } from "@/services/marketService";
+import { portofolioService } from "@/services/portofolioService";
 
 type QuestionType = "number" | "radio";
 
@@ -29,6 +29,99 @@ interface Question {
 }
 
 const questionnaireJson = questionsData as Question[];
+
+/* ============================================================
+   SISTEM SKORING PROFIL RISIKO
+   ============================================================ */
+
+// Pemetaan skor per kategori (berdasarkan id pertanyaan di questions.json)
+const PSIKOLOGIS_IDS = ["dropReaction", "mainPriority"]; // Q1-Q2, rentang skor 2-6
+const FINANSIAL_IDS = [
+  "timeHorizon",
+  "emergencyFund",
+  "wealthProportion",
+  "withdrawalLikelihood",
+]; // Q3-Q6, rentang skor 4-12
+const EXPERIENCE_ID = "experience"; // Q7, skor 1-3
+
+/** Level dimensi Psikologis: 2-3 = L1, 4 = L2, 5-6 = L3 */
+const levelPsikologis = (total: number): 1 | 2 | 3 =>
+  total <= 3 ? 1 : total === 4 ? 2 : 3;
+
+/** Level dimensi Finansial: 4-6 = L1, 7-9 = L2, 10-12 = L3 */
+const levelFinansial = (total: number): 1 | 2 | 3 =>
+  total <= 6 ? 1 : total <= 9 ? 2 : 3;
+
+/** Level dimensi Pengalaman: 1 = L1 (Pemula), 2 = L2 (Menengah), 3 = L3 (Ahli) */
+const levelPengalaman = (score: number): 1 | 2 | 3 =>
+  Math.min(3, Math.max(1, score)) as 1 | 2 | 3;
+
+const LEVEL_TO_PROFILE: Record<1 | 2 | 3, RiskProfile> = {
+  1: "Konservatif",
+  2: "Moderat",
+  3: "Agresif",
+};
+
+interface DimensionResult {
+  levelPsikologis: 1 | 2 | 3;
+  levelFinansial: 1 | 2 | 3;
+  levelPengalaman: 1 | 2 | 3;
+  riskProfile: RiskProfile;
+}
+
+/**
+ * Menentukan profil risiko akhir dengan 3 aturan emas:
+ * 1. Hukum Rantai Terlemah  : profil mengikuti level TERENDAH antara
+ *    Psikologis dan Finansial.
+ * 2. Hukum Pengalaman (Safety Cap): jika Pemula (L1), profil maksimal
+ *    yang diizinkan hanyalah Moderat.
+ * 3. Syarat Agresif         : Agresif HANYA jika Psikologis >= 3,
+ *    Finansial >= 3, dan Pengalaman >= 2 (otomatis terpenuhi oleh
+ *    dua aturan di atas).
+ */
+export function determineRiskProfile(
+  payload: Record<string, { value: string; score?: number }>,
+): DimensionResult {
+  // Total skor per dimensi
+  const totalPsikologis = PSIKOLOGIS_IDS.reduce(
+    (sum, id) => sum + (payload[id]?.score ?? 0),
+    0,
+  );
+  const totalFinansial = FINANSIAL_IDS.reduce(
+    (sum, id) => sum + (payload[id]?.score ?? 0),
+    0,
+  );
+  const skorPengalaman = payload[EXPERIENCE_ID]?.score ?? 0;
+
+  const lvlPsikologis = levelPsikologis(totalPsikologis);
+  const lvlFinansial = levelFinansial(totalFinansial);
+  const lvlPengalaman = levelPengalaman(skorPengalaman);
+
+  // 1. Hukum Rantai Terlemah (Bottleneck)
+  let finalLevel: 1 | 2 | 3 = Math.min(lvlPsikologis, lvlFinansial) as
+    | 1
+    | 2
+    | 3;
+
+  // 2. Hukum Pengalaman (Safety Cap): Pemula maksimal Moderat
+  if (lvlPengalaman === 1 && finalLevel > 2) {
+    finalLevel = 2;
+  }
+
+  // 3. Syarat Agresif: Psikologis >= 3, Finansial >= 3, Pengalaman >= 2
+  const agresifAllowed =
+    lvlPsikologis >= 3 && lvlFinansial >= 3 && lvlPengalaman >= 2;
+  if (finalLevel === 3 && !agresifAllowed) {
+    finalLevel = 2;
+  }
+
+  return {
+    levelPsikologis: lvlPsikologis,
+    levelFinansial: lvlFinansial,
+    levelPengalaman: lvlPengalaman,
+    riskProfile: LEVEL_TO_PROFILE[finalLevel],
+  };
+}
 
 export default function NewRecommendation() {
   const navigate = useNavigate();
@@ -68,15 +161,50 @@ export default function NewRecommendation() {
       }
     });
 
+    // Menentukan profil risiko akhir berdasarkan matriks skoring
+    const dimensi = determineRiskProfile(finalPayload);
+
+    // Profil risiko ikut dikirim ke Backend/GA
+    finalPayload.risk_profile = { value: dimensi.riskProfile ?? "" };
+
     // Anda bisa melihat hasil payload lengkapnya di console browser
     console.log(
       "Data yang akan dikirim ke Backend Algoritma Genetika:",
       finalPayload,
     );
+    console.log("Rincian Perhitungan Profil Risiko:", {
+      "Level Psikologis (Q1-Q2)": dimensi.levelPsikologis,
+      "Level Finansial (Q3-Q6)": dimensi.levelFinansial,
+      "Level Pengalaman (Q7)": dimensi.levelPengalaman,
+      "Profil Akhir": dimensi.riskProfile,
+    });
 
     try {
-      const filteredStocks = await marketService.filterStocks();
-      console.log("Filtered Stocks:", filteredStocks);
+      const formData: FormData = {
+        capital: answers.capital,
+        dropReaction: answers.dropReaction,
+        mainPriority: answers.mainPriority,
+        timeHorizon: answers.timeHorizon,
+        emergencyFund: answers.emergencyFund,
+        wealthProportion: answers.wealthProportion,
+        withdrawalLikelihood: answers.withdrawalLikelihood,
+        experience: answers.experience,
+      };
+
+      const apiPayload = {
+        budget: Number(answers.capital),
+        risk_profile: dimensi.riskProfile,
+        answers: finalPayload,
+      };
+
+      const response =
+        await portofolioService.stockPortofolioGenerate(apiPayload);
+
+      console.log(response);
+
+      // navigate("/portfolio", {
+      //   state: { formData, riskProfile: dimensi.riskProfile },
+      // });
     } catch (error) {
       console.error("Error filtering stocks:", error);
     } finally {
