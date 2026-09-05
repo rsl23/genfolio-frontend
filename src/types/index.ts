@@ -6,6 +6,7 @@ export interface FormData extends Record<string, string> {
 
 export interface PortfolioData {
   id: string;
+  user_id: string;
   fitness_score: number;
   sharpe_ratio: number;
   expected_return: number;
@@ -17,6 +18,8 @@ export interface PortfolioData {
   n_active: number;
   allocated_budget_ok: boolean;
   risk_profile: string;
+  status_portofolio: string;
+  created_at: string;
   budget: number;
   allocations: Array<PortofolioItem>;
   narasi_llm: string;

@@ -1,5 +1,5 @@
 import apiClient from "./apiClient";
-import type { PortfolioData } from "@/types";
+import type { PortfolioData, ApiResponse } from "@/types";
 
 /**
  * Service khusus untuk endpoint-endpoint yang berhubungan dengan "Market"
@@ -22,6 +22,17 @@ export const portofolioService = {
       return response.data;
     } catch (error) {
       // Lemparkan error ke komponen agar bisa ditampilkan ke UI
+      throw error;
+    }
+  },
+  getMyPortofolio: async (): Promise<ApiResponse<PortfolioData>> => {
+    try {
+      const response = await apiClient.get<ApiResponse<PortfolioData>>(
+        "/api/v1/portfolios/my-portofolio",
+      );
+      console.log(response.data);
+      return response.data;
+    } catch (error) {
       throw error;
     }
   },

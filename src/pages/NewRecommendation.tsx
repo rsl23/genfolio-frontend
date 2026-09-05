@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ArrowRight, Activity, ArrowLeft } from "lucide-react";
-import type { FormData, RiskProfile } from "@/types";
+import type { RiskProfile } from "@/types";
 import questionsData from "@/data/questions.json";
 import { portofolioService } from "@/services/portofolioService";
 
@@ -180,17 +180,6 @@ export default function NewRecommendation() {
     });
 
     try {
-      const formData: FormData = {
-        capital: answers.capital,
-        dropReaction: answers.dropReaction,
-        mainPriority: answers.mainPriority,
-        timeHorizon: answers.timeHorizon,
-        emergencyFund: answers.emergencyFund,
-        wealthProportion: answers.wealthProportion,
-        withdrawalLikelihood: answers.withdrawalLikelihood,
-        experience: answers.experience,
-      };
-
       const apiPayload = {
         budget: Number(answers.capital),
         risk_profile: dimensi.riskProfile,
@@ -202,9 +191,9 @@ export default function NewRecommendation() {
 
       console.log(response);
 
-      // navigate("/portfolio", {
-      //   state: { formData, riskProfile: dimensi.riskProfile },
-      // });
+      // Halaman /portfolio akan otomatis mengambil portofolio terbaru
+      // via GET /api/v1/portfolios/my-portofolio saat dirender
+      navigate("/portfolio");
     } catch (error) {
       console.error("Error filtering stocks:", error);
     } finally {
