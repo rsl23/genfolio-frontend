@@ -130,13 +130,40 @@ export default function NewRecommendation() {
     capital: "", // inisialisasi default agar selalu ada untuk type safety
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Profil risiko pilihan user jika override hasil kuis (null = pakai hasil kuis)
+  const [overrideProfile, setOverrideProfile] = useState<RiskProfile>(null);
 
   const totalSteps = questionnaireJson.length;
-  const currentQuestion = questionnaireJson[step];
+  // Step terakhir tambahan = layar konfirmasi profil risiko
+  const isConfirmStep = step === totalSteps;
+  const currentQuestion = questionnaireJson[Math.min(step, totalSteps - 1)];
+
+  /** Membentuk payload jawaban (dengan skor) dari state `answers` */
+  const buildPayload = () => {
+    const payload: Record<string, { value: string; score?: number }> = {};
+    questionnaireJson.forEach((q) => {
+      const answerValue = answers[q.id];
+      if (q.type === "radio" && q.options) {
+        const selectedOption = q.options.find((o) => o.value === answerValue);
+        payload[q.id] = {
+          value: answerValue,
+          score: selectedOption?.score,
+        };
+      } else {
+        payload[q.id] = { value: answerValue };
+      }
+    });
+    return payload;
+  };
+
+  // Profil risiko hasil kuis dihitung live dari jawaban user
+  const quizResult = determineRiskProfile(buildPayload());
+  // Profil final: pilihan user (jika override) atau hasil kuis
+  const finalProfile: RiskProfile = overrideProfile ?? quizResult.riskProfile;
 
   const handleNext = async () => {
-    if (step < totalSteps - 1) {
-      setStep(step + 1);
+    if (step < totalSteps) {
+      setStep(step + 1); // masuk/berpindah ke layar konfirmasi
     } else {
       await handleSubmit();
     }
@@ -146,26 +173,10 @@ export default function NewRecommendation() {
     setIsSubmitting(true);
 
     // Membentuk data lengkap (termasuk score) untuk dikirim ke Backend/GA
-    const finalPayload: Record<string, { value: string; score?: number }> = {};
+    const finalPayload = buildPayload();
 
-    questionnaireJson.forEach((q) => {
-      const answerValue = answers[q.id];
-      if (q.type === "radio" && q.options) {
-        const selectedOption = q.options.find((o) => o.value === answerValue);
-        finalPayload[q.id] = {
-          value: answerValue,
-          score: selectedOption?.score,
-        };
-      } else {
-        finalPayload[q.id] = { value: answerValue };
-      }
-    });
-
-    // Menentukan profil risiko akhir berdasarkan matriks skoring
-    const dimensi = determineRiskProfile(finalPayload);
-
-    // Profil risiko ikut dikirim ke Backend/GA
-    finalPayload.risk_profile = { value: dimensi.riskProfile ?? "" };
+    // Profil risiko final (hasil kuis atau pilihan user) ikut dikirim ke Backend/GA
+    finalPayload.risk_profile = { value: finalProfile ?? "" };
 
     // Anda bisa melihat hasil payload lengkapnya di console browser
     console.log(
@@ -173,16 +184,18 @@ export default function NewRecommendation() {
       finalPayload,
     );
     console.log("Rincian Perhitungan Profil Risiko:", {
-      "Level Psikologis (Q1-Q2)": dimensi.levelPsikologis,
-      "Level Finansial (Q3-Q6)": dimensi.levelFinansial,
-      "Level Pengalaman (Q7)": dimensi.levelPengalaman,
-      "Profil Akhir": dimensi.riskProfile,
+      "Level Psikologis (Q1-Q2)": quizResult.levelPsikologis,
+      "Level Finansial (Q3-Q6)": quizResult.levelFinansial,
+      "Level Pengalaman (Q7)": quizResult.levelPengalaman,
+      "Profil Hasil Kuis": quizResult.riskProfile,
+      "Profil Final (dikirim)": finalProfile,
+      "Di-override User": overrideProfile !== null,
     });
 
     try {
       const apiPayload = {
         budget: Number(answers.capital),
-        risk_profile: dimensi.riskProfile,
+        risk_profile: finalProfile,
         answers: finalPayload,
       };
 
@@ -202,6 +215,7 @@ export default function NewRecommendation() {
   };
 
   const isCurrentStepValid = () => {
+    if (isConfirmStep) return true; // layar konfirmasi selalu valid
     const val = answers[currentQuestion.id];
     return val !== undefined && val.trim() !== "";
   };
@@ -233,10 +247,102 @@ export default function NewRecommendation() {
         {/* Content Box */}
         <div className="bg-slate-50 border rounded-2xl p-6 md:p-10 shadow-sm min-h-[400px] flex flex-col justify-between">
           <div className="flex-1">
-            <div
-              key={currentQuestion.id}
-              className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500"
-            >
+            {isConfirmStep ? (
+              /* ================= LAYAR KONFIRMASI PROFIL RISIKO ================= */
+              <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+                <div className="text-center">
+                  <h2 className="text-2xl font-semibold mb-3">
+                    Profil Risiko Anda
+                  </h2>
+                  <p className="text-slate-500 text-lg">
+                    Berdasarkan jawaban kuesioner Anda, sistem menentukan profil
+                    risiko berikut. Silakan konfirmasi, atau ubah ke pilihan
+                    lain jika Anda merasa tidak cocok.
+                  </p>
+                </div>
+
+                {/* Badge profil hasil kuis */}
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 text-center">
+                  <p className="text-sm font-medium text-blue-600 mb-1">
+                    Hasil Analisis Kuesioner
+                  </p>
+                  <p className="text-4xl font-bold text-blue-900">
+                    {quizResult.riskProfile}
+                  </p>
+                  <div className="flex flex-wrap justify-center gap-3 mt-4 text-xs text-slate-600">
+                    <span className="bg-white px-3 py-1 rounded-full border border-slate-200">
+                      Psikologis: Level {quizResult.levelPsikologis}
+                    </span>
+                    <span className="bg-white px-3 py-1 rounded-full border border-slate-200">
+                      Finansial: Level {quizResult.levelFinansial}
+                    </span>
+                    <span className="bg-white px-3 py-1 rounded-full border border-slate-200">
+                      Pengalaman: Level {quizResult.levelPengalaman}
+                    </span>
+                  </div>
+                  {overrideProfile &&
+                    overrideProfile !== quizResult.riskProfile && (
+                      <p className="text-xs text-amber-600 mt-4">
+                        Anda memilih profil sendiri{" "}
+                        <strong>({overrideProfile}</strong> sebagai ganti hasil
+                        kuesioner <strong>{quizResult.riskProfile}</strong>).
+                      </p>
+                    )}
+                </div>
+
+                {/* Pilihan override */}
+                <div>
+                  <Label className="text-base mb-3 block">
+                    Gunakan profil ini untuk rekomendasi:
+                  </Label>
+                  <RadioGroup
+                    value={overrideProfile ?? quizResult.riskProfile ?? ""}
+                    onValueChange={(val) => setOverrideProfile(val as RiskProfile)}
+                    className="space-y-3 max-w-xl"
+                  >
+                    {(["Konservatif", "Moderat", "Agresif"] as RiskProfile[]).map(
+                      (profile) => {
+                        const isQuizResult = profile === quizResult.riskProfile;
+                        const radioId = `confirm-profile-${profile}`;
+                        return (
+                          <div
+                            key={profile}
+                            className={`flex items-center space-x-3 bg-card border p-5 rounded-xl cursor-pointer transition-colors ${
+                              (overrideProfile ?? quizResult.riskProfile) ===
+                              profile
+                                ? "border-blue-500 bg-blue-50/50"
+                                : "border-border hover:border-blue-400 hover:bg-blue-50/50"
+                            }`}
+                          >
+                            <RadioGroupItem
+                              value={profile}
+                              id={radioId}
+                              className="w-5 h-5"
+                            />
+                            <Label
+                              htmlFor={radioId}
+                              className="cursor-pointer w-full text-base font-medium"
+                            >
+                              {profile}
+                              {isQuizResult && (
+                                <span className="ml-2 text-xs font-normal text-blue-600">
+                                  (rekomendasi sistem dari kuesioner Anda)
+                                </span>
+                              )}
+                            </Label>
+                          </div>
+                        );
+                      },
+                    )}
+                  </RadioGroup>
+                </div>
+              </div>
+            ) : (
+              /* ================= PERTANYAAN KUESIONER ================= */
+              <div
+                key={currentQuestion.id}
+                className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500"
+              >
               <div>
                 <h2 className="text-2xl font-semibold mb-3">
                   {currentQuestion.title}
@@ -317,8 +423,9 @@ export default function NewRecommendation() {
                       })}
                     </RadioGroup>
                   )}
+                </div>
               </div>
-            </div>
+                )}
           </div>
 
           {/* Navigation Buttons */}
@@ -341,6 +448,10 @@ export default function NewRecommendation() {
                 <span className="flex items-center gap-2">
                   <Activity className="w-5 h-5 animate-spin" /> Menjalankan
                   Algoritma Genetika...
+                </span>
+              ) : isConfirmStep ? (
+                <span className="flex items-center gap-2">
+                  Setuju & Jalankan Analisis <ArrowRight className="w-5 h-5" />
                 </span>
               ) : step === totalSteps - 1 ? (
                 <span className="flex items-center gap-2">
