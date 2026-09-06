@@ -44,6 +44,8 @@ import type {
   RiskProfile,
   HistoricalData,
   PortfolioData,
+  MarketData,
+  PortfolioPerformance,
 } from "@/types";
 import { portofolioService } from "@/services/portofolioService";
 
@@ -79,6 +81,10 @@ export default function MyPortfolio() {
 
   // ===== Ambil portofolio terbaru dari backend setiap kali halaman di-render =====
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
+  const [marketData, setMarketData] = useState<MarketData | null>(null);
+  const [performance, setPerformance] = useState<PortfolioPerformance | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -89,12 +95,50 @@ export default function MyPortfolio() {
       setIsLoading(true);
       setFetchError(null);
       try {
-        const response = await portofolioService.getMyPortofolio();
+        // Ambil portofolio, data pasar, dan performa sekaligus; kegagalan
+        // market/performance tidak boleh menggagalkan tampilan portofolio
+        const [portfolioRes, marketRes, performanceRes] =
+          await Promise.allSettled([
+            portofolioService.getMyPortofolio(),
+            portofolioService.priceHistory(),
+            portofolioService.portfolioPerformance(),
+          ]);
+
         if (cancelled) return;
-        if (response.status === "success" && response.data) {
-          setPortfolio(response.data);
+
+        if (
+          portfolioRes.status === "fulfilled" &&
+          portfolioRes.value.status === "success" &&
+          portfolioRes.value.data
+        ) {
+          setPortfolio(portfolioRes.value.data);
         } else {
           setPortfolio(null);
+        }
+
+        if (marketRes.status === "fulfilled" && marketRes.value.data) {
+          setMarketData(marketRes.value.data);
+        } else {
+          setMarketData(null);
+          console.error("Gagal mengambil data pasar:", marketRes);
+        }
+
+        if (
+          performanceRes.status === "fulfilled" &&
+          performanceRes.value.status === "success" &&
+          performanceRes.value.data
+        ) {
+          setPerformance(performanceRes.value.data);
+        } else {
+          setPerformance(null);
+          console.error("Gagal mengambil data performa:", performanceRes);
+        }
+
+        if (portfolioRes.status === "rejected") {
+          console.error("Gagal mengambil portofolio:", portfolioRes.reason);
+          setFetchError(
+            "Gagal memuat portofolio dari server. Menampilkan data simulasi.",
+          );
         }
       } catch (err) {
         console.error("Gagal mengambil portofolio:", err);
@@ -152,6 +196,56 @@ export default function MyPortfolio() {
 
   const totalAssets = portfolio?.n_active ?? mockPortfolioData.length;
   const budgetOk = portfolio?.allocated_budget_ok ?? true;
+
+  // Map ticker -> daftar harga dari marketData
+  const marketPriceMap: Record<string, number[]> = marketData
+    ? Object.fromEntries(
+        marketData.stocks.map((s) => [s.ticker, s.prices.map((p) => p.close)]),
+      )
+    : {};
+
+  const formatRupiahAngka = (value: number) =>
+    value.toLocaleString("id-ID", { maximumFractionDigits: 0 });
+
+  /**
+   * Harga pasar terbaru untuk sebuah ticker:
+   * 1. Ambil harga close TERAKHIR dari marketData (apa pun jumlah barisnya,
+   *    termasuk jika hanya ada 1 harga = harga pembelian).
+   * 2. Jika ticker tidak ada di marketData, fallback ke harga pembelian
+   *    (price_per_lot dari GA dibagi 100).
+   */
+  const getMarketPrice = (ticker: string, buyPricePerShare: number): number => {
+    const closes = marketPriceMap[ticker];
+    if (closes && closes.length > 0) {
+      return closes[closes.length - 1];
+    }
+    // Diagnostik: ticker portofolio tidak ditemukan di market-data
+    if (marketData) {
+      console.warn(
+        `[MyPortfolio] Ticker "${ticker}" tidak ditemukan di market-data. ` +
+          `Ticker tersedia: ${Object.keys(marketPriceMap).join(", ")}. ` +
+          `Menggunakan harga pembelian sebagai fallback.`,
+      );
+    } else {
+      console.warn(
+        `[MyPortfolio] Data market-data tidak tersedia. ` +
+          `Menggunakan harga pembelian untuk "${ticker}".`,
+      );
+    }
+    return buyPricePerShare;
+  };
+
+  // ===== Data chart performa: return portofolio vs IHSG (%) =====
+  const performanceChartData =
+    performance?.series.map((p) => ({
+      date: p.date,
+      portfolio: Math.round(p.portfolio_return * 10000) / 100, // desimal -> %
+      ihsg: Math.round((p.ihsg_return ?? 0) * 10000) / 100,
+    })) ?? [];
+
+  const hasPerformanceData = performanceChartData.length > 0;
+  const lastPoint =
+    performanceChartData[performanceChartData.length - 1] ?? null;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -424,6 +518,85 @@ export default function MyPortfolio() {
         )}
       </div>
 
+      {/* Performance Return Chart: IHSG vs Portofolio (data asli) */}
+      {portfolio && hasPerformanceData && (
+        <Card className="shadow-sm border-slate-200">
+          <CardHeader>
+            <CardTitle className="text-lg">
+              Performa Return: IHSG vs Portofolio
+            </CardTitle>
+            <CardDescription>
+              Periode {performance?.start_date} s/d {performance?.end_date}
+              {lastPoint &&
+                ` &middot; Return terakhir: Portofolio ${lastPoint.portfolio.toFixed(2)}% vs IHSG ${lastPoint.ihsg.toFixed(2)}%`}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={performanceChartData}
+                  margin={{ top: 10, right: 20, bottom: 5, left: 0 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    vertical={false}
+                    stroke="#e7e0d3"
+                  />
+                  <XAxis
+                    dataKey="date"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: "#8c8f85", fontSize: 12 }}
+                    dy={10}
+                    tickFormatter={(val: string) => val.slice(5)} // tampil "MM-DD"
+                  />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: "#8c8f85" }}
+                    dx={-10}
+                    tickFormatter={(val) => `${val}%`}
+                    domain={["auto", "auto"]}
+                  />
+                  <RechartsTooltip
+                    formatter={(value) => `${Number(value).toFixed(2)}%`}
+                    cursor={{
+                      stroke: "#d8d0bf",
+                      strokeWidth: 1,
+                      strokeDasharray: "4 4",
+                    }}
+                  />
+                  <Legend
+                    verticalAlign="top"
+                    height={36}
+                    wrapperStyle={{ paddingBottom: "20px" }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="portfolio"
+                    name="Return Portofolio (%)"
+                    stroke="#117a58"
+                    strokeWidth={3}
+                    dot={{ r: 3, strokeWidth: 2 }}
+                    activeDot={{ r: 6 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ihsg"
+                    name="Return IHSG (%)"
+                    stroke="#e0a83a"
+                    strokeWidth={2}
+                    dot={{ r: 2 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
           {/* Detailed Holding Table */}
@@ -439,7 +612,8 @@ export default function MyPortfolio() {
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[100px]">Kode Emiten</TableHead>
-                    <TableHead>Harga / Lembar</TableHead>
+                    <TableHead>Harga Pasar (Rp/Lembar)</TableHead>
+                    <TableHead>Harga Beli (Rp/Lembar)</TableHead>
                     <TableHead>Jumlah Beli</TableHead>
                     <TableHead className="text-right">
                       Total Nominal (Rp)
@@ -453,7 +627,13 @@ export default function MyPortfolio() {
                         {item.name}
                       </TableCell>
                       <TableCell className="text-slate-600">
-                        Rp {(Number(item.price) / 100).toLocaleString("id-ID")}
+                        Rp{" "}
+                        {formatRupiahAngka(
+                          getMarketPrice(item.name, Number(item.price) / 100),
+                        )}
+                      </TableCell>
+                      <TableCell className="text-slate-600">
+                        Rp {formatRupiahAngka(Number(item.price) / 100)}
                       </TableCell>
                       <TableCell className="font-medium text-slate-700">
                         {item.lot} Lot

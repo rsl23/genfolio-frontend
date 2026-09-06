@@ -1,5 +1,10 @@
 import apiClient from "./apiClient";
-import type { PortfolioData, ApiResponse } from "@/types";
+import type {
+  PortfolioData,
+  ApiResponse,
+  MarketData,
+  PortfolioPerformance,
+} from "@/types";
 
 /**
  * Service khusus untuk endpoint-endpoint yang berhubungan dengan "Market"
@@ -29,6 +34,30 @@ export const portofolioService = {
     try {
       const response = await apiClient.get<ApiResponse<PortfolioData>>(
         "/api/v1/portfolios/my-portofolio",
+      );
+      console.log(response.data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+  priceHistory: async (): Promise<ApiResponse<MarketData>> => {
+    try {
+      const response = await apiClient.get<ApiResponse<MarketData>>(
+        `/api/v1/portfolios/price-history`,
+      );
+      console.log(response.data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+  portfolioPerformance: async (): Promise<
+    ApiResponse<PortfolioPerformance>
+  > => {
+    try {
+      const response = await apiClient.get<ApiResponse<PortfolioPerformance>>(
+        `/api/v1/portfolios/portofolio_performance`,
       );
       console.log(response.data);
       return response.data;
