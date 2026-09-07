@@ -26,9 +26,11 @@ export interface PortfolioData {
 }
 
 export interface PortofolioItem {
+  item_id?: string; // id item di DB (untuk PATCH harga beli)
   ticker: string;
   lots: number;
-  price_per_lot: number;
+  price_per_lot: number; // per lot (harga_acuan x 100)
+  harga_beli?: number; // per lembar — harga beli milik user (bisa diedit via PATCH)
   allocation: number;
   weight: number;
 }
@@ -112,6 +114,21 @@ export interface PerformancePoint {
   portfolio_value: number; // nilai portofolio hari itu, dalam Rupiah
   portfolio_return: number; // return kumulatif portofolio, desimal (0.012 = +1.2%)
   ihsg_return: number | null; // return kumulatif IHSG, desimal; null jika belum tersinkron
+}
+
+/** Payload request untuk PATCH .../items/{item_id}/harga-beli */
+export interface UpdateHargaBeliRequest {
+  harga_beli: number; // harga beli per lembar, dalam IDR
+}
+
+/** Isi `data` dari response PATCH .../items/{item_id}/harga-beli */
+export interface HargaBeliUpdateResult {
+  item_id: string;
+  ticker: string | null;
+  jumlah_lot: number;
+  harga_acuan: number; // per lembar (harga pasar saat pembelian)
+  harga_beli: number; // per lembar (hasil edit)
+  total_investasi: number; // jumlah_lot x 100 lembar x harga_beli
 }
 
 /** Respons data dari GET /api/v1/portfolios/portofolio_performance */

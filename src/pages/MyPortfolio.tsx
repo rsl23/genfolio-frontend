@@ -16,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Briefcase,
   TrendingDown,
@@ -25,6 +26,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Plus,
+  Pencil,
+  X,
+  Check,
+  TrendingUp,
 } from "lucide-react";
 import {
   PieChart,
@@ -85,8 +90,18 @@ export default function MyPortfolio() {
   const [performance, setPerformance] = useState<PortfolioPerformance | null>(
     null,
   );
+  // ===== State edit harga beli (inline di tabel) =====
+  const [editingTicker, setEditingTicker] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingTicker, setSavingTicker] = useState<string | null>(null);
+  // Map ticker -> harga beli user yang sudah tersimpan di backend
+  const [hargaBeliMap, setHargaBeliMap] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [performanceError, setPerformanceError] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +109,7 @@ export default function MyPortfolio() {
     const loadPortfolio = async () => {
       setIsLoading(true);
       setFetchError(null);
+      setPerformanceError(null);
       try {
         // Ambil portofolio, data pasar, dan performa sekaligus; kegagalan
         // market/performance tidak boleh menggagalkan tampilan portofolio
@@ -129,8 +145,16 @@ export default function MyPortfolio() {
           performanceRes.value.data
         ) {
           setPerformance(performanceRes.value.data);
+          setPerformanceError(null);
         } else {
           setPerformance(null);
+          const reason =
+            performanceRes.status === "rejected"
+              ? performanceRes.reason instanceof Error
+                ? performanceRes.reason.message
+                : String(performanceRes.reason)
+              : `status="${performanceRes.value?.status}" / message="${performanceRes.value?.message}"`;
+          setPerformanceError(reason);
           console.error("Gagal mengambil data performa:", performanceRes);
         }
 
@@ -159,6 +183,17 @@ export default function MyPortfolio() {
     // location.key berubah setiap kali navigasi ke halaman ini terjadi,
     // sehingga portofolio selalu diperbarui (mis. setelah GA selesai dijalankan)
   }, [location.key]);
+
+  // Diagnostik: cek field portofolio yang mungkin tidak dikirim backend
+  useEffect(() => {
+    if (portfolio && (portfolio.max_drawdown == null)) {
+      console.warn(
+        "[MyPortfolio] Field 'max_drawdown' tidak ada/null di response " +
+          "GET /my-portofolio. Tile Max Drawdown menampilkan '—'. " +
+          `Field yang tersedia: ${Object.keys(portfolio).join(", ")}.`,
+      );
+    }
+  }, [portfolio]);
 
   // ===== Data tampilan: pakai data asli dari backend, fallback ke mock =====
   const isMock = !portfolio;
@@ -191,10 +226,11 @@ export default function MyPortfolio() {
         lot: a.lots,
         price: a.price_per_lot,
         total: a.allocation,
+        itemId: a.item_id, // id item di DB untuk PATCH harga beli
+        hargaBeli: a.harga_beli, // per lembar, dari backend
       }))
-    : mockPortfolioData;
+    : mockPortfolioData.map((m) => ({ ...m, itemId: undefined, hargaBeli: undefined }));
 
-  const totalAssets = portfolio?.n_active ?? mockPortfolioData.length;
   const budgetOk = portfolio?.allocated_budget_ok ?? true;
 
   // Map ticker -> daftar harga dari marketData
@@ -235,6 +271,97 @@ export default function MyPortfolio() {
     return buyPricePerShare;
   };
 
+  // ===== Handler edit harga beli =====
+  // Batas validasi harga beli (per lembar, IDR)
+  const HARGA_BELI_MIN = 1;
+  const HARGA_BELI_MAX = 1_000_000;
+
+  const validateHargaBeli = (raw: string): number | null => {
+    const hargaBeli = Number(raw.replace(/\D/g, ""));
+    if (!raw || Number.isNaN(hargaBeli) || hargaBeli <= 0) {
+      setEditError("Harga beli wajib diisi dan harus lebih dari 0.");
+      return null;
+    }
+    if (hargaBeli < HARGA_BELI_MIN) {
+      setEditError(`Harga beli minimal Rp ${HARGA_BELI_MIN.toLocaleString("id-ID")}.`);
+      return null;
+    }
+    if (hargaBeli > HARGA_BELI_MAX) {
+      setEditError(
+        `Harga beli maksimal Rp ${HARGA_BELI_MAX.toLocaleString("id-ID")}.`,
+      );
+      return null;
+    }
+    setEditError(null);
+    return hargaBeli;
+  };
+
+  const hargaAcuanPerLembar = (item: (typeof holdings)[number]) =>
+    Number(item.price) / 100; // price_per_lot dari GA -> per lembar
+
+  const hargaBeliTerpakai = (item: (typeof holdings)[number]) =>
+    // Prioritas: hasil edit tersimpan (state) -> harga_beli dari backend ->
+    // fallback harga acuan GA
+    hargaBeliMap[item.name] ?? item.hargaBeli ?? hargaAcuanPerLembar(item);
+
+  const startEdit = (item: (typeof holdings)[number]) => {
+    setEditingTicker(item.name);
+    setEditValue(String(Math.round(hargaBeliTerpakai(item))));
+    setEditError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingTicker(null);
+    setEditValue("");
+    setEditError(null);
+  };
+
+  const saveEdit = async (item: (typeof holdings)[number]) => {
+    // Validasi: wajib diisi, > 0, dan tidak melebihi batas atas
+    const hargaBeli = validateHargaBeli(editValue);
+    if (hargaBeli === null) {
+      console.error("[MyPortfolio] Harga beli tidak valid:", editValue);
+      return;
+    }
+    if (!item.itemId) {
+      console.error(
+        `[MyPortfolio] item_id untuk "${item.name}" tidak tersedia dari backend. ` +
+          `Pastikan response GET /my-portofolio menyertakan field "item_id" pada setiap allocation.`,
+      );
+      cancelEdit();
+      return;
+    }
+
+    setSavingTicker(item.name);
+    try {
+      const res = await portofolioService.updateHargaBeli(item.itemId, {
+        harga_beli: hargaBeli,
+      });
+      if (res.status === "success") {
+        // Simpan harga beli baru ke tampilan
+        setHargaBeliMap((prev) => ({
+          ...prev,
+          [item.name]: res.data.harga_beli,
+        }));
+        // Refresh portofolio agar total_investasi / terpakai / sisa budget terbaru
+        try {
+          const refresh = await portofolioService.getMyPortofolio();
+          if (refresh.status === "success" && refresh.data) {
+            setPortfolio(refresh.data);
+          }
+        } catch (refreshErr) {
+          console.error("Gagal refresh portofolio:", refreshErr);
+        }
+      }
+      cancelEdit();
+    } catch (err) {
+      console.error("Gagal memperbarui harga beli:", err);
+      window.alert("Gagal memperbarui harga beli. Silakan coba lagi nanti.");
+    } finally {
+      setSavingTicker(null);
+    }
+  };
+
   // ===== Data chart performa: return portofolio vs IHSG (%) =====
   const performanceChartData =
     performance?.series.map((p) => ({
@@ -246,6 +373,25 @@ export default function MyPortfolio() {
   const hasPerformanceData = performanceChartData.length > 0;
   const lastPoint =
     performanceChartData[performanceChartData.length - 1] ?? null;
+
+  // ===== Warna garis =====
+  // Portofolio: dinamis — hijau saat return >= 0, merah saat return < 0.
+  // IHSG: SELALU kuning tetap sebagai benchmark, agar warnanya tidak pernah
+  // sama dengan garis portofolio (mudah dibedakan).
+  const portfolioLineColor =
+    lastPoint && lastPoint.portfolio < 0 ? "#dc2626" : "#117a58"; // merah / hijau
+  const ihsgLineColor = "#e0a83a"; // kuning tetap
+
+  // ===== Floating Profit / Loss =====
+  // Dihitung dari Dana Terpakai x return portofolio terakhir (harian)
+  const lastPortfolioReturn =
+    performance && performance.series.length > 0
+      ? performance.series[performance.series.length - 1].portfolio_return
+      : null;
+  const floatingPL =
+    portfolio && lastPortfolioReturn !== null
+      ? portfolio.total_terpakai * lastPortfolioReturn
+      : null;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -293,7 +439,7 @@ export default function MyPortfolio() {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="shadow-sm border-slate-200">
           <CardContent className="p-6">
             <p className="text-sm font-medium text-slate-500 mb-1">
@@ -321,39 +467,38 @@ export default function MyPortfolio() {
             </div>
           </CardContent>
         </Card>
+        {/* Floating Profit / Loss */}
         <Card className="shadow-sm border-slate-200">
           <CardContent className="p-6">
             <p className="text-sm font-medium text-slate-500 mb-1">
-              Jumlah Aset
+              Floating Profit / Loss
             </p>
-            <p className="text-2xl font-bold text-slate-900">
-              {totalAssets} Saham
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-sm border-slate-200">
-          <CardContent className="p-6">
-            <p className="text-sm font-medium text-slate-500 mb-1">
-              Status Optimasi
-            </p>
-            <div
-              className={`flex items-center gap-2 ${
-                budgetOk ? "text-emerald-600" : "text-red-600"
-              }`}
-            >
-              {budgetOk ? (
-                <CheckCircle2 className="w-5 h-5" />
-              ) : (
-                <AlertCircle className="w-5 h-5" />
-              )}
-              <p className="text-xl font-bold">
-                {portfolio
-                  ? budgetOk
-                    ? "Lolos (GA)"
-                    : "Penalti Modal"
-                  : "Optimal (GA)"}
+            {floatingPL !== null ? (
+              <>
+                <div
+                  className={`flex items-center gap-2 text-2xl font-bold ${
+                    floatingPL >= 0 ? "text-emerald-600" : "text-red-600"
+                  }`}
+                >
+                  {floatingPL >= 0 ? (
+                    <TrendingUp className="w-6 h-6" />
+                  ) : (
+                    <TrendingDown className="w-6 h-6" />
+                  )}
+                  <span className={floatingPL >= 0 ? "" : ""}>
+                    {floatingPL >= 0 ? "+" : "-"}
+                    {formattedRupiah(Math.abs(floatingPL))}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Return {lastPortfolioReturn !== null ? (lastPortfolioReturn * 100).toFixed(2) : "0.00"}% dari Dana Terpakai
+                </p>
+              </>
+            ) : (
+              <p className="text-2xl font-bold text-slate-400">
+                &mdash;
               </p>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -402,46 +547,93 @@ export default function MyPortfolio() {
         {portfolio ? (
           <Card className="lg:col-span-2 shadow-sm border-slate-200">
             <CardHeader>
-              <CardTitle className="text-lg">Ringkasan Optimasi (GA)</CardTitle>
+              <CardTitle className="text-lg">
+                Performa Return: IHSG vs Portofolio
+              </CardTitle>
               <CardDescription>
-                Hasil Algoritma Genetika untuk profil risiko {riskProfile}
+                Periode {performance?.start_date} s/d {performance?.end_date}
+                {lastPoint &&
+                  ` &middot; Return terakhir: Portofolio ${lastPoint.portfolio.toFixed(2)}% vs IHSG ${lastPoint.ihsg.toFixed(2)}%`}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-2 gap-4">
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                  <div className="text-sm font-medium text-slate-500 mb-1">
-                    Expected Return
-                  </div>
-                  <div className="text-2xl font-bold text-emerald-600">
-                    {(portfolio.expected_return * 100).toFixed(2)}%
+              {hasPerformanceData ? (
+                <div className="h-[280px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={performanceChartData}
+                      margin={{ top: 10, right: 20, bottom: 5, left: 0 }}
+                    >
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#e7e0d3"
+                      />
+                      <XAxis
+                        dataKey="date"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "#8c8f85", fontSize: 12 }}
+                        dy={10}
+                        tickFormatter={(val: string) => val.slice(5)} // tampil "MM-DD"
+                      />
+                      <YAxis
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "#8c8f85" }}
+                        dx={-10}
+                        tickFormatter={(val) => `${val}%`}
+                        domain={["auto", "auto"]}
+                      />
+                      <RechartsTooltip
+                        formatter={(value) => `${Number(value).toFixed(2)}%`}
+                        cursor={{
+                          stroke: "#d8d0bf",
+                          strokeWidth: 1,
+                          strokeDasharray: "4 4",
+                        }}
+                      />
+                      <Legend
+                        verticalAlign="top"
+                        height={36}
+                        wrapperStyle={{ paddingBottom: "20px" }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="portfolio"
+                        name="Return Portofolio (%)"
+                        stroke={portfolioLineColor}
+                        strokeWidth={3}
+                        dot={{ r: 3, strokeWidth: 2 }}
+                        activeDot={{ r: 6 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="ihsg"
+                        name="Return IHSG (%)"
+                        stroke={ihsgLineColor}
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        activeDot={{ r: 5 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-[280px] flex items-center justify-center bg-amber-50/50 border border-amber-200 rounded-xl">
+                  <div className="text-center px-6">
+                    <AlertCircle className="w-8 h-8 text-amber-500 mx-auto mb-3" />
+                    <p className="text-sm font-medium text-amber-800 mb-1">
+                      Data performa belum tersedia
+                    </p>
+                    <p className="text-xs text-amber-700">
+                      {performanceError
+                        ? `Endpoint performance gagal: ${performanceError}`
+                        : "Response endpoint berhasil tetapi 'series' kosong. Periksa Network tab (request /portofolio_performance) dan console browser untuk detail."}
+                    </p>
                   </div>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                  <div className="text-sm font-medium text-slate-500 mb-1">
-                    Fitness Score
-                  </div>
-                  <div className="text-2xl font-bold text-slate-900">
-                    {portfolio.fitness_score.toFixed(2)}
-                  </div>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                  <div className="text-sm font-medium text-slate-500 mb-1">
-                    Dana Terpakai
-                  </div>
-                  <div className="text-2xl font-bold text-slate-900">
-                    {formattedRupiah(portfolio.total_terpakai)}
-                  </div>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                  <div className="text-sm font-medium text-slate-500 mb-1">
-                    Sisa Budget (Cash)
-                  </div>
-                  <div className="text-2xl font-bold text-blue-700">
-                    {formattedRupiah(portfolio.sisa_budget)}
-                  </div>
-                </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         ) : (
@@ -518,85 +710,6 @@ export default function MyPortfolio() {
         )}
       </div>
 
-      {/* Performance Return Chart: IHSG vs Portofolio (data asli) */}
-      {portfolio && hasPerformanceData && (
-        <Card className="shadow-sm border-slate-200">
-          <CardHeader>
-            <CardTitle className="text-lg">
-              Performa Return: IHSG vs Portofolio
-            </CardTitle>
-            <CardDescription>
-              Periode {performance?.start_date} s/d {performance?.end_date}
-              {lastPoint &&
-                ` &middot; Return terakhir: Portofolio ${lastPoint.portfolio.toFixed(2)}% vs IHSG ${lastPoint.ihsg.toFixed(2)}%`}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={performanceChartData}
-                  margin={{ top: 10, right: 20, bottom: 5, left: 0 }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    vertical={false}
-                    stroke="#e7e0d3"
-                  />
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: "#8c8f85", fontSize: 12 }}
-                    dy={10}
-                    tickFormatter={(val: string) => val.slice(5)} // tampil "MM-DD"
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: "#8c8f85" }}
-                    dx={-10}
-                    tickFormatter={(val) => `${val}%`}
-                    domain={["auto", "auto"]}
-                  />
-                  <RechartsTooltip
-                    formatter={(value) => `${Number(value).toFixed(2)}%`}
-                    cursor={{
-                      stroke: "#d8d0bf",
-                      strokeWidth: 1,
-                      strokeDasharray: "4 4",
-                    }}
-                  />
-                  <Legend
-                    verticalAlign="top"
-                    height={36}
-                    wrapperStyle={{ paddingBottom: "20px" }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="portfolio"
-                    name="Return Portofolio (%)"
-                    stroke="#117a58"
-                    strokeWidth={3}
-                    dot={{ r: 3, strokeWidth: 2 }}
-                    activeDot={{ r: 6 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="ihsg"
-                    name="Return IHSG (%)"
-                    stroke="#e0a83a"
-                    strokeWidth={2}
-                    dot={{ r: 2 }}
-                    activeDot={{ r: 5 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
           {/* Detailed Holding Table */}
@@ -611,38 +724,138 @@ export default function MyPortfolio() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[100px]">Kode Emiten</TableHead>
-                    <TableHead>Harga Pasar (Rp/Lembar)</TableHead>
-                    <TableHead>Harga Beli (Rp/Lembar)</TableHead>
-                    <TableHead>Jumlah Beli</TableHead>
-                    <TableHead className="text-right">
+                    <TableHead className="w-[110px] whitespace-nowrap">
+                      Kode Emiten
+                    </TableHead>
+                    <TableHead className="whitespace-nowrap">
+                      Harga Pasar (Rp/Lembar)
+                    </TableHead>
+                    <TableHead className="whitespace-nowrap">
+                      Harga Acuan GA (Rp/Lembar)
+                    </TableHead>
+                    <TableHead className="whitespace-nowrap">
+                      Harga Beli (Rp/Lembar)
+                    </TableHead>
+                    <TableHead className="whitespace-nowrap">Lot</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">
                       Total Nominal (Rp)
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {holdings.map((item) => (
-                    <TableRow key={item.name}>
-                      <TableCell className="font-bold text-slate-900">
-                        {item.name}
-                      </TableCell>
-                      <TableCell className="text-slate-600">
-                        Rp{" "}
-                        {formatRupiahAngka(
-                          getMarketPrice(item.name, Number(item.price) / 100),
-                        )}
-                      </TableCell>
-                      <TableCell className="text-slate-600">
-                        Rp {formatRupiahAngka(Number(item.price) / 100)}
-                      </TableCell>
-                      <TableCell className="font-medium text-slate-700">
-                        {item.lot} Lot
-                      </TableCell>
-                      <TableCell className="text-right font-semibold text-slate-900">
-                        Rp {item.total.toLocaleString("id-ID")}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {holdings.map((item) => {
+                    const acuan = hargaAcuanPerLembar(item);
+                    const isEditing = editingTicker === item.name;
+                    const isSaving = savingTicker === item.name;
+                    const canEdit = !isMock && !!item.itemId;
+                    return (
+                      <TableRow key={item.name}>
+                        <TableCell className="font-bold text-slate-900 whitespace-nowrap">
+                          {item.name}
+                        </TableCell>
+                        <TableCell className="text-slate-600 whitespace-nowrap">
+                          Rp{" "}
+                          {formatRupiahAngka(getMarketPrice(item.name, acuan))}
+                        </TableCell>
+                        <TableCell className="text-slate-600 whitespace-nowrap">
+                          Rp {formatRupiahAngka(acuan)}
+                        </TableCell>
+                        <TableCell>
+                          {isEditing ? (
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="text"
+                                  inputMode="numeric"
+                                  autoFocus
+                                  aria-invalid={!!editError}
+                                  value={
+                                    editValue
+                                      ? new Intl.NumberFormat("id-ID").format(
+                                          Number(
+                                            editValue.replace(/\D/g, "") || 0,
+                                          ),
+                                        )
+                                      : ""
+                                  }
+                                  onChange={(e) => {
+                                    setEditValue(
+                                      e.target.value.replace(/\D/g, ""),
+                                    );
+                                    if (editError) setEditError(null);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") saveEdit(item);
+                                    if (e.key === "Escape") cancelEdit();
+                                  }}
+                                  className={`h-9 w-32 bg-card ${
+                                    editError
+                                      ? "border-red-400 focus-visible:ring-red-300"
+                                      : ""
+                                  }`}
+                                  disabled={isSaving}
+                                />
+                                <Button
+                                  size="icon"
+                                  onClick={() => saveEdit(item)}
+                                  disabled={isSaving || !editValue}
+                                  className="h-9 w-9 bg-emerald-600 hover:bg-emerald-700"
+                                >
+                                  {isSaving ? (
+                                    <Activity className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Check className="w-4 h-4" />
+                                  )}
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  onClick={cancelEdit}
+                                  disabled={isSaving}
+                                  className="h-9 w-9"
+                                >
+                                  <X className="w-4 h-4" />
+                                </Button>
+                              </div>
+                              {editError && (
+                                <p className="text-xs text-red-600 max-w-[220px]">
+                                  {editError}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-600">
+                                Rp {formatRupiahAngka(hargaBeliTerpakai(item))}
+                              </span>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => startEdit(item)}
+                                disabled={!canEdit}
+                                title={
+                                  canEdit
+                                    ? "Edit harga beli"
+                                    : isMock
+                                      ? "Edit hanya tersedia saat portofolio tersimpan di server"
+                                      : "item_id tidak tersedia dari backend"
+                                }
+                                className="h-8 w-8 text-slate-400 hover:text-blue-600"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-medium text-slate-700 whitespace-nowrap">
+                          {item.lot} Lot
+                        </TableCell>
+                        <TableCell className="text-right font-semibold text-slate-900 whitespace-nowrap">
+                          Rp {item.total.toLocaleString("id-ID")}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
@@ -652,15 +865,31 @@ export default function MyPortfolio() {
           <Card className="shadow-sm border-slate-200">
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <Activity className="w-5 h-5 text-slate-500" /> Komponen
-                Evaluasi (Fitness Score)
+                <Activity className="w-5 h-5 text-slate-500" /> Ringkasan &
+                Komponen Evaluasi (GA)
               </CardTitle>
               <CardDescription>
-                Indikator terukur dari Algoritma Genetika
+                Hasil Algoritma Genetika untuk profil risiko {riskProfile}
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <div className="text-sm font-medium text-slate-500 mb-1">
+                    Dana Terpakai
+                  </div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {portfolio ? formattedRupiah(portfolio.total_terpakai) : "—"}
+                  </div>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <div className="text-sm font-medium text-slate-500 mb-1">
+                    Sisa Budget (Cash)
+                  </div>
+                  <div className="text-2xl font-bold text-blue-700">
+                    {portfolio ? formattedRupiah(portfolio.sisa_budget) : "—"}
+                  </div>
+                </div>
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
                   <div className="text-sm font-medium text-slate-500 mb-1">
                     Fitness Score
@@ -693,9 +922,9 @@ export default function MyPortfolio() {
                   </div>
                   <div className="text-2xl font-bold text-red-600 flex items-center gap-2">
                     <TrendingDown className="w-5 h-5" />
-                    {portfolio
+                    {portfolio?.max_drawdown != null
                       ? `${(portfolio.max_drawdown * 100).toFixed(2)}%`
-                      : "9%"}
+                      : "—"}
                   </div>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">

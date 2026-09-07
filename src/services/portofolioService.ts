@@ -4,6 +4,8 @@ import type {
   ApiResponse,
   MarketData,
   PortfolioPerformance,
+  UpdateHargaBeliRequest,
+  HargaBeliUpdateResult,
 } from "@/types";
 
 /**
@@ -60,6 +62,28 @@ export const portofolioService = {
         `/api/v1/portfolios/portofolio_performance`,
       );
       console.log(response.data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+  /**
+   * Mengubah harga beli (per lembar, IDR) pada satu item portofolio ACTIVE
+   * milik user. Kepemilikan divalidasi dari JWT di backend.
+   * PATCH /api/v1/portfolios/my-portofolio/items/{item_id}/harga-beli
+   */
+  updateHargaBeli: async (
+    itemId: string,
+    body: UpdateHargaBeliRequest,
+  ): Promise<ApiResponse<HargaBeliUpdateResult>> => {
+    try {
+      const response = await apiClient.patch<
+        ApiResponse<HargaBeliUpdateResult>
+      >(
+        `/api/v1/portfolios/my-portofolio/items/${itemId}/harga-beli`,
+        body,
+      );
+      console.log("Response from PATCH harga-beli:", response.data);
       return response.data;
     } catch (error) {
       throw error;
