@@ -131,7 +131,18 @@ export interface HargaBeliUpdateResult {
   total_investasi: number; // jumlah_lot x 100 lembar x harga_beli
 }
 
-/** Respons data dari GET /api/v1/portfolios/portofolio_performance */
+/**
+ * Query param opsional untuk
+ * `GET /api/v1/portfolios/portofolio_performance/{portfolio_id}`
+ */
+export interface PortfolioPerformanceParams {
+  /** Batas akhir perhitungan (inklusif), format "YYYY-MM-DD" -> query `end_date`. */
+  endDate?: string;
+  /** true = hitung performa portofolio simulasi (backtest). Default false (live). */
+  backtest?: boolean;
+}
+
+/** Respons data dari GET /api/v1/portfolios/portofolio_performance/{portfolio_id} */
 export interface PortfolioPerformance {
   start_date: string; // tanggal pembuatan portofolio aktif
   end_date: string; // tanggal data terbaru (saham/IHSG)

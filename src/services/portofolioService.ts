@@ -4,6 +4,7 @@ import type {
   ApiResponse,
   MarketData,
   PortfolioPerformance,
+  PortfolioPerformanceParams,
   UpdateHargaBeliRequest,
   HargaBeliUpdateResult,
 } from "@/types";
@@ -54,12 +55,31 @@ export const portofolioService = {
       throw error;
     }
   },
-  portfolioPerformance: async (): Promise<
-    ApiResponse<PortfolioPerformance>
-  > => {
+  /**
+   * Menghitung performa portofolio TERTENTU (return kumulatif harian) vs IHSG.
+   * GET /api/v1/portfolios/portofolio_performance/{portfolio_id}
+   *
+   * @param portfolioId ID portofolio (UUID) — ambil dari field `id` pada
+   *                    response `getMyPortofolio()`.
+   * @param params      `endDate` (YYYY-MM-DD, batas akhir perhitungan;
+   *                    dikirim sebagai query `end_date`) dan `backtest`
+   *                    (true = portofolio simulasi).
+   */
+  portfolioPerformance: async (
+    portfolioId: string,
+    params: PortfolioPerformanceParams = {},
+  ): Promise<ApiResponse<PortfolioPerformance>> => {
     try {
+      // Query param: backtest selalu dikirim (default false = live),
+      // end_date hanya bila diberikan.
+      const query: Record<string, string | boolean> = {
+        backtest: params.backtest ?? false,
+      };
+      if (params.endDate) query.end_date = params.endDate;
+
       const response = await apiClient.get<ApiResponse<PortfolioPerformance>>(
-        `/api/v1/portfolios/portofolio_performance`,
+        `/api/v1/portfolios/portofolio_performance/${portfolioId}`,
+        { params: query },
       );
       console.log(response.data);
       return response.data;

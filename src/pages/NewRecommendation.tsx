@@ -197,6 +197,7 @@ export default function NewRecommendation() {
         budget: Number(answers.capital),
         risk_profile: finalProfile,
         answers: finalPayload,
+        backtest: false,
       };
 
       const response =
@@ -297,43 +298,45 @@ export default function NewRecommendation() {
                   </Label>
                   <RadioGroup
                     value={overrideProfile ?? quizResult.riskProfile ?? ""}
-                    onValueChange={(val) => setOverrideProfile(val as RiskProfile)}
+                    onValueChange={(val) =>
+                      setOverrideProfile(val as RiskProfile)
+                    }
                     className="space-y-3 max-w-xl"
                   >
-                    {(["Konservatif", "Moderat", "Agresif"] as RiskProfile[]).map(
-                      (profile) => {
-                        const isQuizResult = profile === quizResult.riskProfile;
-                        const radioId = `confirm-profile-${profile}`;
-                        return (
-                          <div
-                            key={profile}
-                            className={`flex items-center space-x-3 bg-card border p-5 rounded-xl cursor-pointer transition-colors ${
-                              (overrideProfile ?? quizResult.riskProfile) ===
-                              profile
-                                ? "border-blue-500 bg-blue-50/50"
-                                : "border-border hover:border-blue-400 hover:bg-blue-50/50"
-                            }`}
+                    {(
+                      ["Konservatif", "Moderat", "Agresif"] as RiskProfile[]
+                    ).map((profile) => {
+                      const isQuizResult = profile === quizResult.riskProfile;
+                      const radioId = `confirm-profile-${profile}`;
+                      return (
+                        <div
+                          key={profile}
+                          className={`flex items-center space-x-3 bg-card border p-5 rounded-xl cursor-pointer transition-colors ${
+                            (overrideProfile ?? quizResult.riskProfile) ===
+                            profile
+                              ? "border-blue-500 bg-blue-50/50"
+                              : "border-border hover:border-blue-400 hover:bg-blue-50/50"
+                          }`}
+                        >
+                          <RadioGroupItem
+                            value={profile}
+                            id={radioId}
+                            className="w-5 h-5"
+                          />
+                          <Label
+                            htmlFor={radioId}
+                            className="cursor-pointer w-full text-base font-medium"
                           >
-                            <RadioGroupItem
-                              value={profile}
-                              id={radioId}
-                              className="w-5 h-5"
-                            />
-                            <Label
-                              htmlFor={radioId}
-                              className="cursor-pointer w-full text-base font-medium"
-                            >
-                              {profile}
-                              {isQuizResult && (
-                                <span className="ml-2 text-xs font-normal text-blue-600">
-                                  (rekomendasi sistem dari kuesioner Anda)
-                                </span>
-                              )}
-                            </Label>
-                          </div>
-                        );
-                      },
-                    )}
+                            {profile}
+                            {isQuizResult && (
+                              <span className="ml-2 text-xs font-normal text-blue-600">
+                                (rekomendasi sistem dari kuesioner Anda)
+                              </span>
+                            )}
+                          </Label>
+                        </div>
+                      );
+                    })}
                   </RadioGroup>
                 </div>
               </div>
@@ -343,89 +346,89 @@ export default function NewRecommendation() {
                 key={currentQuestion.id}
                 className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500"
               >
-              <div>
-                <h2 className="text-2xl font-semibold mb-3">
-                  {currentQuestion.title}
-                </h2>
-                <p className="text-slate-500 mb-8 text-lg">
-                  {currentQuestion.subtitle}
-                </p>
+                <div>
+                  <h2 className="text-2xl font-semibold mb-3">
+                    {currentQuestion.title}
+                  </h2>
+                  <p className="text-slate-500 mb-8 text-lg">
+                    {currentQuestion.subtitle}
+                  </p>
 
-                {/* RENDER NUMBER INPUT */}
-                {currentQuestion.type === "number" && (
-                  <div className="max-w-md">
-                    <Label className="text-base mb-3 block">Nominal</Label>
-                    <div className="relative">
-                      {currentQuestion.prefix && (
-                        <span className="absolute left-4 top-3.5 text-slate-500 font-medium">
-                          {currentQuestion.prefix}
-                        </span>
-                      )}
-                      <Input
-                        // 1. Ubah type menjadi text, tambahkan inputMode agar keyboard HP tetap memunculkan angka
-                        type="text"
-                        inputMode="numeric"
-                        placeholder={currentQuestion.placeholder}
-                        className={`text-xl h-14 bg-card ${currentQuestion.prefix ? "pl-12" : "pl-4"}`}
-                        // 2. Format nilai yang diambil dari state agar memiliki titik
-                        value={
-                          answers[currentQuestion.id]
-                            ? new Intl.NumberFormat("id-ID").format(
-                                Number(answers[currentQuestion.id]),
-                              )
-                            : ""
-                        }
-                        onChange={(e) => {
-                          // 3. Bersihkan semua karakter selain angka (menghapus titik saat diketik)
-                          const rawValue = e.target.value.replace(/\D/g, "");
+                  {/* RENDER NUMBER INPUT */}
+                  {currentQuestion.type === "number" && (
+                    <div className="max-w-md">
+                      <Label className="text-base mb-3 block">Nominal</Label>
+                      <div className="relative">
+                        {currentQuestion.prefix && (
+                          <span className="absolute left-4 top-3.5 text-slate-500 font-medium">
+                            {currentQuestion.prefix}
+                          </span>
+                        )}
+                        <Input
+                          // 1. Ubah type menjadi text, tambahkan inputMode agar keyboard HP tetap memunculkan angka
+                          type="text"
+                          inputMode="numeric"
+                          placeholder={currentQuestion.placeholder}
+                          className={`text-xl h-14 bg-card ${currentQuestion.prefix ? "pl-12" : "pl-4"}`}
+                          // 2. Format nilai yang diambil dari state agar memiliki titik
+                          value={
+                            answers[currentQuestion.id]
+                              ? new Intl.NumberFormat("id-ID").format(
+                                  Number(answers[currentQuestion.id]),
+                                )
+                              : ""
+                          }
+                          onChange={(e) => {
+                            // 3. Bersihkan semua karakter selain angka (menghapus titik saat diketik)
+                            const rawValue = e.target.value.replace(/\D/g, "");
 
-                          // 4. Simpan nilai mentahnya (integer/string angka) ke state, bukan nilai bertitiknya
-                          setAnswers({
-                            ...answers,
-                            [currentQuestion.id]: rawValue,
-                          });
-                        }}
-                      />
+                            // 4. Simpan nilai mentahnya (integer/string angka) ke state, bukan nilai bertitiknya
+                            setAnswers({
+                              ...answers,
+                              [currentQuestion.id]: rawValue,
+                            });
+                          }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
-
-                {/* RENDER RADIO INPUT */}
-                {currentQuestion.type === "radio" &&
-                  currentQuestion.options && (
-                    <RadioGroup
-                      value={answers[currentQuestion.id] || ""}
-                      onValueChange={(val) =>
-                        setAnswers({ ...answers, [currentQuestion.id]: val })
-                      }
-                      className="space-y-4 max-w-xl"
-                    >
-                      {currentQuestion.options.map((opt, idx) => {
-                        const radioId = `${currentQuestion.id}-opt-${idx}`;
-                        return (
-                          <div
-                            key={opt.value}
-                            className="flex items-center space-x-3 bg-card border border-border p-5 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
-                          >
-                            <RadioGroupItem
-                              value={opt.value}
-                              id={radioId}
-                              className="w-5 h-5"
-                            />
-                            <Label
-                              htmlFor={radioId}
-                              className="cursor-pointer w-full text-base font-medium"
-                            >
-                              {opt.label}
-                            </Label>
-                          </div>
-                        );
-                      })}
-                    </RadioGroup>
                   )}
+
+                  {/* RENDER RADIO INPUT */}
+                  {currentQuestion.type === "radio" &&
+                    currentQuestion.options && (
+                      <RadioGroup
+                        value={answers[currentQuestion.id] || ""}
+                        onValueChange={(val) =>
+                          setAnswers({ ...answers, [currentQuestion.id]: val })
+                        }
+                        className="space-y-4 max-w-xl"
+                      >
+                        {currentQuestion.options.map((opt, idx) => {
+                          const radioId = `${currentQuestion.id}-opt-${idx}`;
+                          return (
+                            <div
+                              key={opt.value}
+                              className="flex items-center space-x-3 bg-card border border-border p-5 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+                            >
+                              <RadioGroupItem
+                                value={opt.value}
+                                id={radioId}
+                                className="w-5 h-5"
+                              />
+                              <Label
+                                htmlFor={radioId}
+                                className="cursor-pointer w-full text-base font-medium"
+                              >
+                                {opt.label}
+                              </Label>
+                            </div>
+                          );
+                        })}
+                      </RadioGroup>
+                    )}
                 </div>
               </div>
-                )}
+            )}
           </div>
 
           {/* Navigation Buttons */}

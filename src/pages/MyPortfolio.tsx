@@ -77,6 +77,32 @@ const mockHistoricalData: HistoricalData[] = [
   { year: "2023", portfolio: 28, ihsg: 14 },
 ];
 
+/**
+ * Menjalankan satu promise dan mengembalikan hasilnya dalam bentuk
+ * "settled" (fulfilled/rejected) sehingga kegagalan satu request tidak
+ * membatalkan request lain.
+ */
+async function settle<T>(
+  promise: Promise<T>,
+): Promise<PromiseSettledResult<T>> {
+  try {
+    return { status: "fulfilled", value: await promise };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
+/**
+ * Tanggal hari ini (waktu lokal browser) dalam format "YYYY-MM-DD",
+ * dipakai sebagai query param `end_date` pada endpoint performa.
+ */
+function getTodayIsoDate(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 export default function MyPortfolio() {
   const location = useLocation();
   const state = location.state as {
@@ -99,9 +125,7 @@ export default function MyPortfolio() {
   const [hargaBeliMap, setHargaBeliMap] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [performanceError, setPerformanceError] = useState<string | null>(
-    null,
-  );
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,26 +135,41 @@ export default function MyPortfolio() {
       setFetchError(null);
       setPerformanceError(null);
       try {
-        // Ambil portofolio, data pasar, dan performa sekaligus; kegagalan
-        // market/performance tidak boleh menggagalkan tampilan portofolio
-        const [portfolioRes, marketRes, performanceRes] =
-          await Promise.allSettled([
-            portofolioService.getMyPortofolio(),
-            portofolioService.priceHistory(),
-            portofolioService.portfolioPerformance(),
-          ]);
+        // 1) Portofolio diambil lebih dulu karena field `id`-nya dipakai
+        //    sebagai path param endpoint performa. Kegagalan request ini tidak
+        //    membatalkan request market/performance (pakai `settle`).
+        const portfolioRes = await settle(portofolioService.getMyPortofolio());
 
         if (cancelled) return;
 
-        if (
+        const portfolioData =
           portfolioRes.status === "fulfilled" &&
           portfolioRes.value.status === "success" &&
           portfolioRes.value.data
-        ) {
-          setPortfolio(portfolioRes.value.data);
-        } else {
-          setPortfolio(null);
-        }
+            ? portfolioRes.value.data
+            : null;
+        setPortfolio(portfolioData);
+
+        // 2) Data pasar & performa diambil bersamaan; kegagalan market/
+        //    performance tidak boleh menggagalkan tampilan portofolio.
+        //    Endpoint performa butuh portfolio_id (field `id` portofolio di
+        //    atas), end_date = tanggal hari ini, dan backtest = false (live).
+        const [marketRes, performanceRes] = await Promise.allSettled([
+          portofolioService.priceHistory(),
+          portfolioData
+            ? portofolioService.portfolioPerformance(portfolioData.id, {
+                endDate: getTodayIsoDate(),
+                backtest: false,
+              })
+            : Promise.reject(
+                new Error(
+                  "portfolio_id tidak tersedia: GET /my-portofolio gagal " +
+                    "atau user belum memiliki portofolio aktif di server.",
+                ),
+              ),
+        ]);
+
+        if (cancelled) return;
 
         if (marketRes.status === "fulfilled" && marketRes.value.data) {
           setMarketData(marketRes.value.data);
@@ -186,7 +225,7 @@ export default function MyPortfolio() {
 
   // Diagnostik: cek field portofolio yang mungkin tidak dikirim backend
   useEffect(() => {
-    if (portfolio && (portfolio.max_drawdown == null)) {
+    if (portfolio && portfolio.max_drawdown == null) {
       console.warn(
         "[MyPortfolio] Field 'max_drawdown' tidak ada/null di response " +
           "GET /my-portofolio. Tile Max Drawdown menampilkan '—'. " +
@@ -229,7 +268,11 @@ export default function MyPortfolio() {
         itemId: a.item_id, // id item di DB untuk PATCH harga beli
         hargaBeli: a.harga_beli, // per lembar, dari backend
       }))
-    : mockPortfolioData.map((m) => ({ ...m, itemId: undefined, hargaBeli: undefined }));
+    : mockPortfolioData.map((m) => ({
+        ...m,
+        itemId: undefined,
+        hargaBeli: undefined,
+      }));
 
   const budgetOk = portfolio?.allocated_budget_ok ?? true;
 
@@ -283,7 +326,9 @@ export default function MyPortfolio() {
       return null;
     }
     if (hargaBeli < HARGA_BELI_MIN) {
-      setEditError(`Harga beli minimal Rp ${HARGA_BELI_MIN.toLocaleString("id-ID")}.`);
+      setEditError(
+        `Harga beli minimal Rp ${HARGA_BELI_MIN.toLocaleString("id-ID")}.`,
+      );
       return null;
     }
     if (hargaBeli > HARGA_BELI_MAX) {
@@ -491,13 +536,15 @@ export default function MyPortfolio() {
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-2">
-                  Return {lastPortfolioReturn !== null ? (lastPortfolioReturn * 100).toFixed(2) : "0.00"}% dari Dana Terpakai
+                  Return{" "}
+                  {lastPortfolioReturn !== null
+                    ? (lastPortfolioReturn * 100).toFixed(2)
+                    : "0.00"}
+                  % dari Dana Terpakai
                 </p>
               </>
             ) : (
-              <p className="text-2xl font-bold text-slate-400">
-                &mdash;
-              </p>
+              <p className="text-2xl font-bold text-slate-400">&mdash;</p>
             )}
           </CardContent>
         </Card>
@@ -552,8 +599,13 @@ export default function MyPortfolio() {
               </CardTitle>
               <CardDescription>
                 Periode {performance?.start_date} s/d {performance?.end_date}
-                {lastPoint &&
-                  ` &middot; Return terakhir: Portofolio ${lastPoint.portfolio.toFixed(2)}% vs IHSG ${lastPoint.ihsg.toFixed(2)}%`}
+                {lastPoint && (
+                  <>
+                    <br />
+                    Return terakhir: Portofolio {lastPoint.portfolio.toFixed(2)}
+                    % vs IHSG {lastPoint.ihsg.toFixed(2)}%
+                  </>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -879,7 +931,9 @@ export default function MyPortfolio() {
                     Dana Terpakai
                   </div>
                   <div className="text-2xl font-bold text-slate-900">
-                    {portfolio ? formattedRupiah(portfolio.total_terpakai) : "—"}
+                    {portfolio
+                      ? formattedRupiah(portfolio.total_terpakai)
+                      : "—"}
                   </div>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
