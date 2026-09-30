@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useLocation, Link } from "react-router-dom";
 import {
   Card,
@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import PortfolioModeToggle from "@/components/PortfolioModeToggle";
 import {
   Briefcase,
   TrendingDown,
@@ -29,6 +31,7 @@ import {
   Pencil,
   X,
   Check,
+  FlaskConical,
   TrendingUp,
 } from "lucide-react";
 import {
@@ -49,10 +52,24 @@ import type {
   RiskProfile,
   HistoricalData,
   PortfolioData,
+  PortfolioMode,
   MarketData,
   PortfolioPerformance,
 } from "@/types";
 import { portofolioService } from "@/services/portofolioService";
+import {
+  BACKTEST_DATA_MAX,
+  BACKTEST_DATA_MIN,
+  addDaysIso,
+  defaultBacktestEndDate,
+  getBacktestDateRef,
+  getCachedPortfolio,
+  getPortfolioMode,
+  getTodayIsoDate,
+  setBacktestDateRef,
+  setCachedPortfolio,
+  setPortfolioMode,
+} from "@/lib/portfolioMode";
 
 const COLORS = ["#117a58", "#e0a83a", "#2b8a9a", "#c25b3a", "#8b5cf6"];
 
@@ -77,6 +94,85 @@ const mockHistoricalData: HistoricalData[] = [
   { year: "2023", portfolio: 28, ihsg: 14 },
 ];
 
+/** Jumlah titik maksimum yang digambar di chart performa (downsampling). */
+const MAX_CHART_POINTS = 150;
+
+interface ChartPoint {
+  date: string;
+  portfolio: number;
+  ihsg: number;
+}
+
+/**
+ * Chart performa dibungkus `memo`: merender Recharts dengan ratusan titik
+ * itu mahal, dan setiap ketikan pada form edit harga beli memicu re-render
+ * halaman — dengan memo + data yang stabil (useMemo), chart tidak di-render
+ * ulang saat state lain berubah.
+ */
+const PerformanceChart = memo(function PerformanceChart({
+  data,
+  portfolioLineColor,
+}: {
+  data: ChartPoint[];
+  portfolioLineColor: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data} margin={{ top: 10, right: 20, bottom: 5, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e7e0d3" />
+        <XAxis
+          dataKey="date"
+          axisLine={false}
+          tickLine={false}
+          tick={{ fill: "#8c8f85", fontSize: 12 }}
+          dy={10}
+          interval="preserveStartEnd"
+          tickFormatter={(val: string) => val.slice(5)} // tampil "MM-DD"
+        />
+        <YAxis
+          axisLine={false}
+          tickLine={false}
+          tick={{ fill: "#8c8f85" }}
+          dx={-10}
+          tickFormatter={(val) => `${val}%`}
+          domain={["auto", "auto"]}
+        />
+        <RechartsTooltip
+          formatter={(value) => `${Number(value).toFixed(2)}%`}
+          cursor={{ stroke: "#d8d0bf", strokeWidth: 1, strokeDasharray: "4 4" }}
+        />
+        <Legend
+          verticalAlign="top"
+          height={36}
+          wrapperStyle={{ paddingBottom: "20px" }}
+        />
+        {/* dot={false}: ratusan lingkaran SVG per garis adalah biaya render
+            terbesar Recharts — cukup activeDot yang muncul saat hover */}
+        <Line
+          type="monotone"
+          dataKey="portfolio"
+          name="Return Portofolio (%)"
+          stroke={portfolioLineColor}
+          strokeWidth={3}
+          dot={false}
+          activeDot={{ r: 6 }}
+          isAnimationActive={false}
+        />
+        <Line
+          type="monotone"
+          dataKey="ihsg"
+          name="Return IHSG (%)"
+          stroke="#e0a83a"
+          strokeWidth={2}
+          dot={false}
+          activeDot={{ r: 5 }}
+          isAnimationActive={false}
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+});
+
 /**
  * Menjalankan satu promise dan mengembalikan hasilnya dalam bentuk
  * "settled" (fulfilled/rejected) sehingga kegagalan satu request tidak
@@ -92,23 +188,31 @@ async function settle<T>(
   }
 }
 
-/**
- * Tanggal hari ini (waktu lokal browser) dalam format "YYYY-MM-DD",
- * dipakai sebagai query param `end_date` pada endpoint performa.
- */
-function getTodayIsoDate(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
-}
-
 export default function MyPortfolio() {
   const location = useLocation();
   const state = location.state as {
     formData: FormData;
     riskProfile: RiskProfile;
+    /** Diisi halaman Rekomendasi Baru saat navigasi ke halaman ini. */
+    mode?: PortfolioMode;
+    dateRef?: string | null;
+    portfolio?: PortfolioData | null;
   } | null;
+
+  // ===== Mode program: "live" (portofolio aktif) / "backtest" (simulasi) =====
+  // Prioritas: state navigasi -> preferensi tersimpan. Dengan begitu pilihan
+  // mode tetap konsisten antar halaman maupun setelah halaman direload.
+  const [mode, setMode] = useState<PortfolioMode>(
+    () => state?.mode ?? getPortfolioMode(),
+  );
+  // Tanggal simulasi (date_ref) portofolio backtest yang sedang dilihat
+  const [dateRef, setDateRef] = useState<string | null>(
+    () => state?.dateRef ?? getBacktestDateRef(),
+  );
+  // Batas akhir kurva backtest (query `end_date`); default data historis terakhir
+  const [endDate, setEndDate] = useState<string>(() =>
+    defaultBacktestEndDate(),
+  );
 
   // ===== Ambil portofolio terbaru dari backend setiap kali halaman di-render =====
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
@@ -127,17 +231,82 @@ export default function MyPortfolio() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [performanceError, setPerformanceError] = useState<string | null>(null);
 
+  /** Ganti mode program (Live <-> Backtest) dan simpan preferensinya. */
+  const handleModeChange = (next: PortfolioMode) => {
+    if (next === mode) return;
+    setPortfolioMode(next);
+    setMode(next);
+    // Edit harga beli dibatalkan saat berpindah mode
+    setEditingTicker(null);
+    setEditError(null);
+    if (next === "backtest") {
+      // Prioritas date_ref: cache portofolio backtest terakhir (field
+      // `date_ref` dari backend), lalu preferensi tersimpan.
+      const cached = getCachedPortfolio("backtest");
+      setDateRef(cached?.date_ref?.slice(0, 10) ?? getBacktestDateRef());
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     const loadPortfolio = async () => {
       setIsLoading(true);
       setFetchError(null);
-      setPerformanceError(null);
       try {
-        // 1) Portofolio diambil lebih dulu karena field `id`-nya dipakai
-        //    sebagai path param endpoint performa. Kegagalan request ini tidak
-        //    membatalkan request market/performance (pakai `settle`).
+        if (mode === "backtest") {
+          // Mode simulasi TIDAK memakai endpoint live. Sumber portofolio:
+          // 1) response GET /my-portofolio?backtest=true — sumber paling
+          //    resmi & terbaru (date_ref ikut dari DB), dipakai sepanjang
+          //    benar-benar berstatus "active_backtest";
+          // 2) fallback bila request gagal/kosong: hasil generate (state
+          //    navigasi) atau cache localStorage.
+          let data: PortfolioData | null = null;
+
+          const res = await settle(portofolioService.getMyPortofolio(true));
+          if (cancelled) return;
+          if (
+            res.status === "fulfilled" &&
+            res.value.status === "success" &&
+            res.value.data &&
+            res.value.data.status_portofolio === "active_backtest"
+          ) {
+            data = res.value.data;
+          } else if (res.status === "rejected") {
+            console.warn(
+              "[MyPortfolio] Portofolio backtest tidak dapat dimuat dari server:",
+              res.reason,
+            );
+          }
+
+          if (!data) {
+            data = state?.portfolio ?? getCachedPortfolio("backtest");
+          }
+
+          if (cancelled) return;
+          setPortfolio(data);
+          if (data) setCachedPortfolio("backtest", data);
+
+          // date_ref HANYA dipercaya dari field portofolio (backend/response
+          // generate). localStorage/state dipakai sebagai fallback terakhir
+          // bila data tidak memuat date_ref, supaya tanggal simulasi yang
+          // tampil selalu sesuai portofolio yang aktif di server.
+          const portfolioDateRef = data?.date_ref?.slice(0, 10) ?? null;
+          if (portfolioDateRef) {
+            setDateRef(portfolioDateRef);
+            setBacktestDateRef(portfolioDateRef);
+          } else {
+            setDateRef(state?.dateRef ?? getBacktestDateRef());
+          }
+
+          // Harga pasar harian tidak tersedia untuk tanggal simulasi
+          setMarketData(null);
+          return;
+        }
+
+        // ===== Mode LIVE =====
+        // Portofolio diambil lebih dulu karena field `id`-nya dipakai sebagai
+        // path param endpoint performa (lihat efek kedua di bawah).
         const portfolioRes = await settle(portofolioService.getMyPortofolio());
 
         if (cancelled) return;
@@ -149,52 +318,16 @@ export default function MyPortfolio() {
             ? portfolioRes.value.data
             : null;
         setPortfolio(portfolioData);
+        if (portfolioData) setCachedPortfolio("live", portfolioData);
 
-        // 2) Data pasar & performa diambil bersamaan; kegagalan market/
-        //    performance tidak boleh menggagalkan tampilan portofolio.
-        //    Endpoint performa butuh portfolio_id (field `id` portofolio di
-        //    atas), end_date = tanggal hari ini, dan backtest = false (live).
-        const [marketRes, performanceRes] = await Promise.allSettled([
-          portofolioService.priceHistory(),
-          portfolioData
-            ? portofolioService.portfolioPerformance(portfolioData.id, {
-                endDate: getTodayIsoDate(),
-                backtest: false,
-              })
-            : Promise.reject(
-                new Error(
-                  "portfolio_id tidak tersedia: GET /my-portofolio gagal " +
-                    "atau user belum memiliki portofolio aktif di server.",
-                ),
-              ),
-        ]);
-
+        // Data pasar (harga terkini) untuk kolom "Harga Pasar"
+        const marketRes = await settle(portofolioService.priceHistory());
         if (cancelled) return;
-
         if (marketRes.status === "fulfilled" && marketRes.value.data) {
           setMarketData(marketRes.value.data);
         } else {
           setMarketData(null);
           console.error("Gagal mengambil data pasar:", marketRes);
-        }
-
-        if (
-          performanceRes.status === "fulfilled" &&
-          performanceRes.value.status === "success" &&
-          performanceRes.value.data
-        ) {
-          setPerformance(performanceRes.value.data);
-          setPerformanceError(null);
-        } else {
-          setPerformance(null);
-          const reason =
-            performanceRes.status === "rejected"
-              ? performanceRes.reason instanceof Error
-                ? performanceRes.reason.message
-                : String(performanceRes.reason)
-              : `status="${performanceRes.value?.status}" / message="${performanceRes.value?.message}"`;
-          setPerformanceError(reason);
-          console.error("Gagal mengambil data performa:", performanceRes);
         }
 
         if (portfolioRes.status === "rejected") {
@@ -221,7 +354,69 @@ export default function MyPortfolio() {
     };
     // location.key berubah setiap kali navigasi ke halaman ini terjadi,
     // sehingga portofolio selalu diperbarui (mis. setelah GA selesai dijalankan)
-  }, [location.key]);
+    // Mode ikut jadi dependency agar tombol Live/Backtest memuat ulang data.
+  }, [location.key, mode, state]);
+
+  // ===== Efek 2: muat performa (return portofolio vs IHSG) =====
+  // Dipisah dari efek 1 agar mengganti tanggal akhir kurva (end_date) tidak
+  // memicu pemuatan ulang portofolio & data pasar.
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPerformance = async () => {
+      const portfolioId = portfolio?.id ?? null;
+      if (!portfolioId) {
+        setPerformance(null);
+        setPerformanceError(null);
+        return;
+      }
+      // end_date minimal = HARI SETELAH tanggal simulasi (date_ref + 1),
+      // supaya kurva performa selalu punya minimal 2 titik data.
+      if (mode === "backtest" && dateRef && endDate <= dateRef) {
+        setPerformance(null);
+        setPerformanceError(
+          `Tanggal akhir kurva (${endDate}) tidak boleh sama atau lebih awal ` +
+            `daripada tanggal simulasi portofolio (${dateRef}). ` +
+            `Pilih tanggal akhir minimal ${addDaysIso(dateRef, 1)}.`,
+        );
+        return;
+      }
+
+      const res = await settle(
+        portofolioService.portfolioPerformance(portfolioId, {
+          // Mode live: hitung sampai data terbaru. Mode backtest: sampai
+          // tanggal akhir yang dipilih user.
+          endDate: mode === "backtest" ? endDate : getTodayIsoDate(),
+          backtest: mode === "backtest",
+        }),
+      );
+      if (cancelled) return;
+
+      if (
+        res.status === "fulfilled" &&
+        res.value.status === "success" &&
+        res.value.data
+      ) {
+        setPerformance(res.value.data);
+        setPerformanceError(null);
+      } else {
+        setPerformance(null);
+        const reason =
+          res.status === "rejected"
+            ? res.reason instanceof Error
+              ? res.reason.message
+              : String(res.reason)
+            : `status="${res.value?.status}" / message="${res.value?.message}"`;
+        setPerformanceError(reason);
+        console.error("Gagal mengambil data performa:", res);
+      }
+    };
+
+    loadPerformance();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, portfolio?.id, endDate, dateRef]);
 
   // Diagnostik: cek field portofolio yang mungkin tidak dikirim backend
   useEffect(() => {
@@ -298,18 +493,21 @@ export default function MyPortfolio() {
     if (closes && closes.length > 0) {
       return closes[closes.length - 1];
     }
-    // Diagnostik: ticker portofolio tidak ditemukan di market-data
-    if (marketData) {
-      console.warn(
-        `[MyPortfolio] Ticker "${ticker}" tidak ditemukan di market-data. ` +
-          `Ticker tersedia: ${Object.keys(marketPriceMap).join(", ")}. ` +
-          `Menggunakan harga pembelian sebagai fallback.`,
-      );
-    } else {
-      console.warn(
-        `[MyPortfolio] Data market-data tidak tersedia. ` +
-          `Menggunakan harga pembelian untuk "${ticker}".`,
-      );
+    // Diagnostik hanya relevan di mode live: pada mode backtest harga pasar
+    // memang tidak diambil (tidak ada data as-of tanggal simulasi).
+    if (mode === "live") {
+      if (marketData) {
+        console.warn(
+          `[MyPortfolio] Ticker "${ticker}" tidak ditemukan di market-data. ` +
+            `Ticker tersedia: ${Object.keys(marketPriceMap).join(", ")}. ` +
+            `Menggunakan harga pembelian sebagai fallback.`,
+        );
+      } else {
+        console.warn(
+          `[MyPortfolio] Data market-data tidak tersedia. ` +
+            `Menggunakan harga pembelian untuk "${ticker}".`,
+        );
+      }
     }
     return buyPricePerShare;
   };
@@ -408,12 +606,25 @@ export default function MyPortfolio() {
   };
 
   // ===== Data chart performa: return portofolio vs IHSG (%) =====
-  const performanceChartData =
-    performance?.series.map((p) => ({
-      date: p.date,
-      portfolio: Math.round(p.portfolio_return * 10000) / 100, // desimal -> %
-      ihsg: Math.round((p.ihsg_return ?? 0) * 10000) / 100,
-    })) ?? [];
+  // Downsampling: kurva backtest/live bisa ratusan titik harian. Recharts
+  // jauh lebih ringan dengan ~150 titik; bentuk kurva tetap terbaca dan
+  // titik pertama & terakhir SELALU dipertahankan (return terakhir akurat).
+  const performanceChartData = useMemo(() => {
+    const raw =
+      performance?.series.map((p) => ({
+        // Backend mode backtest mengirim "2024-06-28T00:00:00" — ambil
+        // bagian tanggalnya saja agar label sumbu X & tooltip bersih.
+        date: p.date.slice(0, 10),
+        portfolio: Math.round(p.portfolio_return * 10000) / 100, // desimal -> %
+        ihsg: Math.round((p.ihsg_return ?? 0) * 10000) / 100,
+      })) ?? [];
+    if (raw.length <= MAX_CHART_POINTS) return raw;
+    const step = Math.ceil(raw.length / MAX_CHART_POINTS);
+    const sampled = raw.filter((_, index) => index % step === 0);
+    const last = raw[raw.length - 1];
+    if (sampled[sampled.length - 1] !== last) sampled.push(last);
+    return sampled;
+  }, [performance]);
 
   const hasPerformanceData = performanceChartData.length > 0;
   const lastPoint =
@@ -421,14 +632,13 @@ export default function MyPortfolio() {
 
   // ===== Warna garis =====
   // Portofolio: dinamis — hijau saat return >= 0, merah saat return < 0.
-  // IHSG: SELALU kuning tetap sebagai benchmark, agar warnanya tidak pernah
-  // sama dengan garis portofolio (mudah dibedakan).
+  // IHSG: SELALU kuning tetap (#e0a83a, didefinisikan di PerformanceChart)
+  // sebagai benchmark agar tidak pernah sama dengan garis portofolio.
   const portfolioLineColor =
     lastPoint && lastPoint.portfolio < 0 ? "#dc2626" : "#117a58"; // merah / hijau
-  const ihsgLineColor = "#e0a83a"; // kuning tetap
 
   // ===== Floating Profit / Loss =====
-  // Dihitung dari Dana Terpakai x return portofolio terakhir (harian)
+  // Dihitung dari Dana Terpakai x return terakhir portofolio (harian)
   const lastPortfolioReturn =
     performance && performance.series.length > 0
       ? performance.series[performance.series.length - 1].portfolio_return
@@ -437,6 +647,12 @@ export default function MyPortfolio() {
     portfolio && lastPortfolioReturn !== null
       ? portfolio.total_terpakai * lastPortfolioReturn
       : null;
+
+  // ===== Batas date picker end_date (mode backtest) =====
+  // Minimal HARI SETELAH tanggal simulasi (date_ref + 1) agar kurva punya
+  // minimal 2 titik data, maksimal data historis terakhir (BACKTEST_DATA_MAX).
+  const minEndDate = dateRef ? addDaysIso(dateRef, 1) : BACKTEST_DATA_MIN;
+  const isEndDateValid = endDate >= minEndDate && endDate <= BACKTEST_DATA_MAX;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -450,12 +666,58 @@ export default function MyPortfolio() {
             Pantau dan evaluasi performa rekomendasi aset Anda.
           </p>
         </div>
-        <Link to="/generate" className="w-full md:w-auto">
+        <Link to="/generate" state={{ mode }} className="w-full md:w-auto">
           <Button className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 h-11 px-6">
             <Plus className="w-5 h-5 mr-2" />
             Rekomendasi Baru
           </Button>
         </Link>
+      </div>
+
+      {/* ===== Toolbar: pilih program Live atau Backtest ===== */}
+      <div className="flex flex-col md:flex-row md:items-end gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Mode Program</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {mode === "backtest"
+              ? `Menampilkan hasil simulasi${
+                  dateRef ? ` per ${dateRef}` : ""
+                } — portofolio live tidak berubah.`
+              : "Menampilkan portofolio live (data pasar terbaru)."}
+          </p>
+        </div>
+        <div className="md:ml-auto flex flex-wrap items-end gap-4">
+          <PortfolioModeToggle mode={mode} onChange={handleModeChange} />
+          {mode === "backtest" && (
+            <div className="space-y-1">
+              <Label
+                htmlFor="backtest-end-date"
+                className="text-xs font-medium text-slate-600"
+              >
+                Tanggal Akhir Kurva (end_date)
+              </Label>
+              <Input
+                id="backtest-end-date"
+                type="date"
+                value={endDate}
+                min={minEndDate}
+                max={BACKTEST_DATA_MAX}
+                aria-invalid={!isEndDateValid}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="h-9 w-44 bg-card"
+              />
+              <p
+                className={`text-[11px] ${
+                  isEndDateValid ? "text-slate-500" : "text-red-600"
+                }`}
+              >
+                {isEndDateValid
+                  ? `Pilih ${minEndDate} s/d ${BACKTEST_DATA_MAX} (minimal sehari setelah tanggal simulasi).`
+                  : `Tanggal harus antara ${minEndDate} dan ${BACKTEST_DATA_MAX}.`}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {isLoading && (
@@ -472,7 +734,48 @@ export default function MyPortfolio() {
         </div>
       )}
 
-      {isMock && !fetchError && !isLoading && (
+      {/* Mode backtest aktif tetapi belum ada portofolio simulasi tersimpan */}
+      {mode === "backtest" && !portfolio && !isLoading && (
+        <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-3 text-amber-800">
+          <FlaskConical className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold">
+              Belum ada portofolio simulasi backtest
+            </p>
+            <p className="mt-1">
+              Jalankan <strong>Rekomendasi Baru</strong> dalam mode Backtest
+              untuk membuat portofolio simulasi
+              {dateRef ? ` per ${dateRef}` : ""}. Portofolio live Anda tidak
+              akan berubah.
+            </p>
+            <Link to="/generate" state={{ mode: "backtest" }}>
+              <Button
+                size="sm"
+                className="mt-3 bg-amber-600 hover:bg-amber-700 h-8"
+              >
+                <FlaskConical className="w-4 h-4 mr-1.5" />
+                Jalankan Simulasi Backtest
+              </Button>
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Keterangan mode backtest saat portofolio simulasi tersedia */}
+      {mode === "backtest" && portfolio && !isLoading && (
+        <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl flex items-start gap-3 text-blue-800">
+          <Info className="w-5 h-5 shrink-0 mt-0.5" />
+          <p className="text-sm">
+            <strong>Mode Simulasi:</strong> menampilkan portofolio
+            {dateRef ? ` per ${dateRef}` : ""} (status{" "}
+            <code>active_backtest</code>), kurva performa dihitung sampai{" "}
+            {performance?.end_date?.slice(0, 10) ?? endDate}. Harga pasar harian
+            tidak ditampilkan dan edit harga beli hanya tersedia di mode Live.
+          </p>
+        </div>
+      )}
+
+      {isMock && mode === "live" && !fetchError && !isLoading && (
         <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-3 text-amber-800">
           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
           <p className="text-sm">
@@ -598,7 +901,16 @@ export default function MyPortfolio() {
                 Performa Return: IHSG vs Portofolio
               </CardTitle>
               <CardDescription>
-                Periode {performance?.start_date} s/d {performance?.end_date}
+                Periode {performance?.start_date?.slice(0, 10)} s/d{" "}
+                {performance?.end_date?.slice(0, 10)}
+                {mode === "backtest" && (
+                  <>
+                    {" "}
+                    <span className="font-medium text-amber-700">
+                      (simulasi backtest)
+                    </span>
+                  </>
+                )}
                 {lastPoint && (
                   <>
                     <br />
@@ -611,65 +923,10 @@ export default function MyPortfolio() {
             <CardContent>
               {hasPerformanceData ? (
                 <div className="h-[280px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart
-                      data={performanceChartData}
-                      margin={{ top: 10, right: 20, bottom: 5, left: 0 }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        vertical={false}
-                        stroke="#e7e0d3"
-                      />
-                      <XAxis
-                        dataKey="date"
-                        axisLine={false}
-                        tickLine={false}
-                        tick={{ fill: "#8c8f85", fontSize: 12 }}
-                        dy={10}
-                        tickFormatter={(val: string) => val.slice(5)} // tampil "MM-DD"
-                      />
-                      <YAxis
-                        axisLine={false}
-                        tickLine={false}
-                        tick={{ fill: "#8c8f85" }}
-                        dx={-10}
-                        tickFormatter={(val) => `${val}%`}
-                        domain={["auto", "auto"]}
-                      />
-                      <RechartsTooltip
-                        formatter={(value) => `${Number(value).toFixed(2)}%`}
-                        cursor={{
-                          stroke: "#d8d0bf",
-                          strokeWidth: 1,
-                          strokeDasharray: "4 4",
-                        }}
-                      />
-                      <Legend
-                        verticalAlign="top"
-                        height={36}
-                        wrapperStyle={{ paddingBottom: "20px" }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="portfolio"
-                        name="Return Portofolio (%)"
-                        stroke={portfolioLineColor}
-                        strokeWidth={3}
-                        dot={{ r: 3, strokeWidth: 2 }}
-                        activeDot={{ r: 6 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="ihsg"
-                        name="Return IHSG (%)"
-                        stroke={ihsgLineColor}
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 5 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <PerformanceChart
+                    data={performanceChartData}
+                    portfolioLineColor={portfolioLineColor}
+                  />
                 </div>
               ) : (
                 <div className="h-[280px] flex items-center justify-center bg-amber-50/50 border border-amber-200 rounded-xl">
@@ -779,11 +1036,18 @@ export default function MyPortfolio() {
                     <TableHead className="w-[110px] whitespace-nowrap">
                       Kode Emiten
                     </TableHead>
+                    {/* Harga pasar harian hanya bermakna di mode live */}
+                    {mode === "live" && (
+                      <TableHead className="whitespace-nowrap">
+                        Harga Pasar (Rp/Lembar)
+                      </TableHead>
+                    )}
                     <TableHead className="whitespace-nowrap">
-                      Harga Pasar (Rp/Lembar)
-                    </TableHead>
-                    <TableHead className="whitespace-nowrap">
-                      Harga Acuan GA (Rp/Lembar)
+                      {mode === "backtest"
+                        ? `Harga Acuan GA per ${
+                            dateRef ?? "tanggal simulasi"
+                          } (Rp/Lembar)`
+                        : "Harga Acuan GA (Rp/Lembar)"}
                     </TableHead>
                     <TableHead className="whitespace-nowrap">
                       Harga Beli (Rp/Lembar)
@@ -799,16 +1063,18 @@ export default function MyPortfolio() {
                     const acuan = hargaAcuanPerLembar(item);
                     const isEditing = editingTicker === item.name;
                     const isSaving = savingTicker === item.name;
-                    const canEdit = !isMock && !!item.itemId;
+                    const canEdit = mode === "live" && !isMock && !!item.itemId;
                     return (
                       <TableRow key={item.name}>
                         <TableCell className="font-bold text-slate-900 whitespace-nowrap">
                           {item.name}
                         </TableCell>
-                        <TableCell className="text-slate-600 whitespace-nowrap">
-                          Rp{" "}
-                          {formatRupiahAngka(getMarketPrice(item.name, acuan))}
-                        </TableCell>
+                        {mode === "live" && (
+                          <TableCell className="text-slate-600 whitespace-nowrap">
+                            Rp{" "}
+                            {formatRupiahAngka(getMarketPrice(item.name, acuan))}
+                          </TableCell>
+                        )}
                         <TableCell className="text-slate-600 whitespace-nowrap">
                           Rp {formatRupiahAngka(acuan)}
                         </TableCell>
@@ -888,9 +1154,11 @@ export default function MyPortfolio() {
                                 title={
                                   canEdit
                                     ? "Edit harga beli"
-                                    : isMock
-                                      ? "Edit hanya tersedia saat portofolio tersimpan di server"
-                                      : "item_id tidak tersedia dari backend"
+                                    : mode === "backtest"
+                                      ? "Harga beli hanya bisa diubah pada portofolio live"
+                                      : isMock
+                                        ? "Edit hanya tersedia saat portofolio tersimpan di server"
+                                        : "item_id tidak tersedia dari backend"
                                 }
                                 className="h-8 w-8 text-slate-400 hover:text-blue-600"
                               >

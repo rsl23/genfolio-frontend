@@ -1,5 +1,24 @@
 export type RiskProfile = "Konservatif" | "Moderat" | "Agresif" | null;
 
+/**
+ * Mode tampilan/eksekusi rekomendasi:
+ * - "live"     : portofolio real (status backend "active"), data pasar hari ini.
+ * - "backtest" : simulasi historis (status backend "active_backtest").
+ */
+export type PortfolioMode = "live" | "backtest";
+
+/** Body request POST /api/v1/portfolios/generate */
+export interface GeneratePortofolioRequest {
+  budget: number; // total modal (IDR)
+  risk_profile: RiskProfile | string;
+  /** Jawaban kuesioner (dikirim apa adanya; backend mengabaikannya). */
+  answers?: Record<string, { value: string; score?: number }>;
+  /** true = GA memakai data historis lokal (bukan data pasar hari ini). */
+  backtest: boolean;
+  /** Tanggal acuan simulasi "YYYY-MM-DD" — WAJIB bila backtest = true. */
+  date_ref?: string;
+}
+
 export interface FormData extends Record<string, string> {
   capital: string;
 }
@@ -20,6 +39,7 @@ export interface PortfolioData {
   risk_profile: string;
   status_portofolio: string;
   created_at: string;
+  date_ref: string;
   budget: number;
   allocations: Array<PortofolioItem>;
   narasi_llm: string;
@@ -110,7 +130,7 @@ export interface MarketData {
 }
 
 export interface PerformancePoint {
-  date: string; // "2026-09-04" (ISO date)
+  date: string; // "2026-09-04"; mode backtest bisa "2024-06-28T00:00:00" (datetime)
   portfolio_value: number; // nilai portofolio hari itu, dalam Rupiah
   portfolio_return: number; // return kumulatif portofolio, desimal (0.012 = +1.2%)
   ihsg_return: number | null; // return kumulatif IHSG, desimal; null jika belum tersinkron

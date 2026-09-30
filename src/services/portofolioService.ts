@@ -5,6 +5,7 @@ import type {
   MarketData,
   PortfolioPerformance,
   PortfolioPerformanceParams,
+  GeneratePortofolioRequest,
   UpdateHargaBeliRequest,
   HargaBeliUpdateResult,
 } from "@/types";
@@ -14,15 +15,18 @@ import type {
  */
 export const portofolioService = {
   /**
-   * Mengambil daftar saham yang lolos filter (Fundamental & Teknikal)
-   * GET /api/v1/market/filter-stocks
+   * Menjalankan GA untuk membuat portofolio baru.
+   * POST /api/v1/portfolios/generate
+   *
+   * Body: `budget`, `risk_profile`, `backtest`, dan `date_ref` (wajib bila
+   * `backtest = true`). Hasil backtest disimpan backend sebagai portofolio
+   * berstatus `active_backtest` sehingga tidak mengubah portofolio live.
    */
   stockPortofolioGenerate: async (
-    body?: Record<string, any>,
-  ): Promise<PortfolioData[]> => {
+    body: GeneratePortofolioRequest,
+  ): Promise<ApiResponse<PortfolioData>> => {
     try {
-      // Axios akan otomatis mengubah params menjadi query string
-      const response = await apiClient.post<PortfolioData[]>(
+      const response = await apiClient.post<ApiResponse<PortfolioData>>(
         "/api/v1/portfolios/generate",
         body,
       );
@@ -33,10 +37,22 @@ export const portofolioService = {
       throw error;
     }
   },
-  getMyPortofolio: async (): Promise<ApiResponse<PortfolioData>> => {
+  /**
+   * Ambil portofolio aktif milik user (identitas dari JWT).
+   * GET /api/v1/portfolios/my-portofolio
+   *
+   * @param backtest false (default) = portofolio LIVE berstatus "active";
+   *                 true = portofolio SIMULASI berstatus "active_backtest".
+   *                 Response memuat field `date_ref` (tanggal simulasi untuk
+   *                 backtest / waktu generate untuk live).
+   */
+  getMyPortofolio: async (
+    backtest = false,
+  ): Promise<ApiResponse<PortfolioData>> => {
     try {
       const response = await apiClient.get<ApiResponse<PortfolioData>>(
-        "/api/v1/portfolios/my-portofolio",
+        "/api/v1/portfolios/my-portfolio",
+        backtest ? { params: { backtest: true } } : undefined,
       );
       console.log(response.data);
       return response.data;
@@ -78,7 +94,7 @@ export const portofolioService = {
       if (params.endDate) query.end_date = params.endDate;
 
       const response = await apiClient.get<ApiResponse<PortfolioPerformance>>(
-        `/api/v1/portfolios/portofolio_performance/${portfolioId}`,
+        `/api/v1/portfolios/portfolio_performance/${portfolioId}`,
         { params: query },
       );
       console.log(response.data);
@@ -90,7 +106,7 @@ export const portofolioService = {
   /**
    * Mengubah harga beli (per lembar, IDR) pada satu item portofolio ACTIVE
    * milik user. Kepemilikan divalidasi dari JWT di backend.
-   * PATCH /api/v1/portfolios/my-portofolio/items/{item_id}/harga-beli
+   * PATCH /api/v1/portfolios/my-portfolio/items/{item_id}/harga-beli
    */
   updateHargaBeli: async (
     itemId: string,
@@ -99,10 +115,7 @@ export const portofolioService = {
     try {
       const response = await apiClient.patch<
         ApiResponse<HargaBeliUpdateResult>
-      >(
-        `/api/v1/portfolios/my-portofolio/items/${itemId}/harga-beli`,
-        body,
-      );
+      >(`/api/v1/portfolios/my-portfolio/items/${itemId}/harga-beli`, body);
       console.log("Response from PATCH harga-beli:", response.data);
       return response.data;
     } catch (error) {

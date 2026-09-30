@@ -1,13 +1,29 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ArrowRight, Activity, ArrowLeft } from "lucide-react";
-import type { RiskProfile } from "@/types";
+import PortfolioModeToggle from "@/components/PortfolioModeToggle";
+import { ArrowRight, Activity, AlertCircle, ArrowLeft, Info } from "lucide-react";
+import type {
+  GeneratePortofolioRequest,
+  PortfolioMode,
+  RiskProfile,
+} from "@/types";
 import questionsData from "@/data/questions.json";
 import { portofolioService } from "@/services/portofolioService";
+import {
+  BACKTEST_PICKER_MAX,
+  BACKTEST_PICKER_MIN,
+  clampToBacktestPickerRange,
+  defaultBacktestDateRef,
+  getBacktestDateRef,
+  getPortfolioMode,
+  setBacktestDateRef,
+  setCachedPortfolio,
+  setPortfolioMode,
+} from "@/lib/portfolioMode";
 
 type QuestionType = "number" | "radio";
 
@@ -29,6 +45,32 @@ interface Question {
 }
 
 const questionnaireJson = questionsData as Question[];
+
+/**
+ * Ubah error dari axios/FastAPI menjadi pesan yang bisa ditampilkan ke user.
+ * FastAPI mengirim detail error pada `response.data.detail` (string) atau
+ * pada `message` untuk envelope ApiResponse.
+ */
+function describeApiError(error: unknown): string {
+  const err = error as {
+    response?: { status?: number; data?: { detail?: unknown; message?: string } };
+    message?: string;
+  };
+  const data = err?.response?.data;
+  if (typeof data?.detail === "string" && data.detail.trim() !== "") {
+    return data.detail;
+  }
+  if (Array.isArray(data?.detail)) {
+    return `Validasi gagal: ${JSON.stringify(data.detail)}`;
+  }
+  if (typeof data?.message === "string" && data.message.trim() !== "") {
+    return data.message;
+  }
+  if (err?.response?.status) {
+    return `Server membalas status ${err.response.status} tanpa detail.`;
+  }
+  return err?.message ?? "Terjadi kesalahan yang tidak diketahui.";
+}
 
 /* ============================================================
    SISTEM SKORING PROFIL RISIKO
@@ -125,6 +167,9 @@ export function determineRiskProfile(
 
 export default function NewRecommendation() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // Mode bisa sudah dipilih dari halaman Portofolio Saya (navigasi + state)
+  const navigationState = location.state as { mode?: PortfolioMode } | null;
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({
     capital: "", // inisialisasi default agar selalu ada untuk type safety
@@ -132,6 +177,44 @@ export default function NewRecommendation() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Profil risiko pilihan user jika override hasil kuis (null = pakai hasil kuis)
   const [overrideProfile, setOverrideProfile] = useState<RiskProfile>(null);
+  // ===== Mode program: "live" (data pasar terbaru) / "backtest" (historis) =====
+  const [mode, setMode] = useState<PortfolioMode>(
+    () => navigationState?.mode ?? getPortfolioMode(),
+  );
+  // Tanggal acuan simulasi (date_ref) — hanya dipakai saat mode backtest
+  const [backtestDate, setBacktestDate] = useState<string>(() =>
+    clampToBacktestPickerRange(
+      getBacktestDateRef() ?? defaultBacktestDateRef(),
+    ),
+  );
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const isBacktest = mode === "backtest";
+  // date_ref wajib dan harus berada dalam rentang tanggal yang boleh dipilih
+  // user (BACKTEST_PICKER_MIN..BACKTEST_PICKER_MAX) supaya GA tidak gagal
+  // dengan error 400 dari server.
+  const isBacktestDateValid =
+    !isBacktest ||
+    (backtestDate !== "" &&
+      backtestDate >= BACKTEST_PICKER_MIN &&
+      backtestDate <= BACKTEST_PICKER_MAX);
+
+  const handleModeChange = (next: PortfolioMode) => {
+    setMode(next);
+    setSubmitError(null);
+    // Simpan preferensi agar halaman /portfolio (dan kunjungan berikutnya)
+    // memakai mode yang sama.
+    setPortfolioMode(next);
+    if (next === "backtest") {
+      // Pastikan tanggal simulasi selalu berada di rentang picker — termasuk
+      // saat nilai lama dari localStorage ternyata di luar rentang.
+      const safeDate = clampToBacktestPickerRange(
+        backtestDate || defaultBacktestDateRef(),
+      );
+      setBacktestDate(safeDate);
+      setBacktestDateRef(safeDate);
+    }
+  };
 
   const totalSteps = questionnaireJson.length;
   // Step terakhir tambahan = layar konfirmasi profil risiko
@@ -171,6 +254,7 @@ export default function NewRecommendation() {
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
+    setSubmitError(null);
 
     // Membentuk data lengkap (termasuk score) untuk dikirim ke Backend/GA
     const finalPayload = buildPayload();
@@ -193,23 +277,54 @@ export default function NewRecommendation() {
     });
 
     try {
-      const apiPayload = {
+      // Body mengikuti PortfolioGenerateRequest backend: mode backtest wajib
+      // menyertakan date_ref; mode live tidak mengirim date_ref sama sekali.
+      const apiPayload: GeneratePortofolioRequest = {
         budget: Number(answers.capital),
         risk_profile: finalProfile,
         answers: finalPayload,
-        backtest: false,
+        backtest: isBacktest,
+        ...(isBacktest ? { date_ref: backtestDate } : {}),
       };
+      console.log(
+        `Payload ke GA (mode ${mode}):`,
+        apiPayload,
+      );
 
       const response =
         await portofolioService.stockPortofolioGenerate(apiPayload);
 
       console.log(response);
 
-      // Halaman /portfolio akan otomatis mengambil portofolio terbaru
-      // via GET /api/v1/portfolios/my-portofolio saat dirender
-      navigate("/portfolio");
+      // Simpan preferensi mode + cache hasil generate. Cache dipakai halaman
+      // /portfolio untuk menampilkan portofolio yang baru dibuat (khusus
+      // backtest, karena GET /my-portofolio mengembalikan portofolio live).
+      setPortfolioMode(mode);
+      setBacktestDateRef(isBacktest ? backtestDate : null);
+      if (response.status === "success" && response.data) {
+        setCachedPortfolio(mode, response.data);
+      }
+
+      // Halaman /portfolio otomatis mengambil portofolio terbaru
+      // via GET /api/v1/portfolios/my-portofolio saat dirender (mode live),
+      // dan memakai state/cache di atas saat mode backtest.
+      // date_ref resmi = field backend; fallback tanggal yang dipilih user.
+      const backendDateRef =
+        response.status === "success" && response.data?.date_ref
+          ? response.data.date_ref.slice(0, 10)
+          : null;
+      navigate("/portfolio", {
+        state: {
+          formData: { capital: answers.capital },
+          riskProfile: finalProfile,
+          mode,
+          dateRef: backendDateRef ?? (isBacktest ? backtestDate : null),
+          portfolio: response.status === "success" ? response.data : null,
+        },
+      });
     } catch (error) {
       console.error("Error filtering stocks:", error);
+      setSubmitError(describeApiError(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -243,7 +358,25 @@ export default function NewRecommendation() {
               </div>
             ))}
           </div>
+          {!isConfirmStep && (
+            <p className="mt-4 text-xs text-slate-500">
+              Pilihan mode program (Live atau Backtest) muncul di langkah
+              terakhir, bersamaan dengan hasil profil risiko Anda.
+            </p>
+          )}
         </div>
+
+        {isConfirmStep && isBacktest && (
+          <div className="mb-8 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-amber-800">
+            <Info className="w-5 h-5 shrink-0 mt-0.5" />
+            <p className="text-sm">
+              <strong>Mode Backtest:</strong> GA dijalankan memakai data
+              historis per {backtestDate}. Hasilnya disimpan sebagai portofolio
+              simulasi (status <code>active_backtest</code>) sehingga{" "}
+              <strong>portofolio live Anda tidak berubah</strong>.
+            </p>
+          </div>
+        )}
 
         {/* Content Box */}
         <div className="bg-slate-50 border rounded-2xl p-6 md:p-10 shadow-sm min-h-[400px] flex flex-col justify-between">
@@ -284,11 +417,86 @@ export default function NewRecommendation() {
                   {overrideProfile &&
                     overrideProfile !== quizResult.riskProfile && (
                       <p className="text-xs text-amber-600 mt-4">
-                        Anda memilih profil sendiri{" "}
-                        <strong>({overrideProfile}</strong> sebagai ganti hasil
+                        Anda memilih profil sendiri (
+                        <strong>{overrideProfile}</strong> sebagai ganti hasil
                         kuesioner <strong>{quizResult.riskProfile}</strong>).
                       </p>
                     )}
+                </div>
+
+                {/* ===== Pilih Mode Program: Live / Backtest ===== */}
+                <div className="bg-card border border-slate-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row md:items-center gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">
+                      Pilih Mode Program
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      <strong>Live</strong> memakai data pasar terbaru,{" "}
+                      <strong>Backtest</strong> menyimulasikan strategi pada
+                      tanggal historis. Kuesioner dan profil risiko di atas
+                      berlaku untuk kedua mode.
+                    </p>
+                  </div>
+                  <div className="md:ml-auto flex flex-wrap items-end gap-4">
+                    <PortfolioModeToggle
+                      mode={mode}
+                      onChange={handleModeChange}
+                      disabled={isSubmitting}
+                    />
+                    {isBacktest && (
+                      <div className="space-y-1">
+                        <Label
+                          htmlFor="date-ref"
+                          className="text-xs font-medium text-slate-600"
+                        >
+                          Tanggal Simulasi (date_ref)
+                        </Label>
+                        <Input
+                          id="date-ref"
+                          type="date"
+                          value={backtestDate}
+                          min={BACKTEST_PICKER_MIN}
+                          max={BACKTEST_PICKER_MAX}
+                          disabled={isSubmitting}
+                          aria-invalid={!isBacktestDateValid}
+                          onChange={(e) => {
+                            setBacktestDate(e.target.value);
+                            setBacktestDateRef(e.target.value || null);
+                          }}
+                          className="h-9 w-44 bg-card"
+                        />
+                        <p
+                          className={`text-[11px] ${
+                            isBacktestDateValid
+                              ? "text-slate-500"
+                              : "text-red-600"
+                          }`}
+                        >
+                          {isBacktestDateValid
+                            ? `Tanggal simulasi yang tersedia ${BACKTEST_PICKER_MIN} s/d ${BACKTEST_PICKER_MAX}.`
+                            : `Pilih tanggal antara ${BACKTEST_PICKER_MIN} dan ${BACKTEST_PICKER_MAX}.`}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Ringkasan mode eksekusi */}
+                <div
+                  className={`rounded-2xl p-5 border text-sm ${
+                    isBacktest
+                      ? "bg-amber-50 border-amber-200 text-amber-900"
+                      : "bg-blue-50 border-blue-200 text-blue-900"
+                  }`}
+                >
+                  <p className="font-medium mb-1">
+                    Mode: {isBacktest ? "Simulasi Backtest" : "Live"}
+                  </p>
+                  <p className="leading-relaxed">
+                    {isBacktest
+                      ? `GA akan dijalankan memakai data historis per ${backtestDate}. Hasilnya tersimpan sebagai portofolio simulasi terpisah dan tidak mengubah portofolio live Anda.`
+                      : "GA akan dijalankan memakai data pasar terbaru untuk memperbarui portofolio live Anda."}
+                  </p>
                 </div>
 
                 {/* Pilihan override */}
@@ -431,6 +639,19 @@ export default function NewRecommendation() {
             )}
           </div>
 
+          {/* Pesan kegagalan dari backend (mis. date_ref di luar cakupan data) */}
+          {submitError && (
+            <div className="mt-8 bg-red-50 border border-red-200 p-4 rounded-xl flex items-start gap-3 text-red-700">
+              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold">
+                  Gagal menjalankan rekomendasi
+                </p>
+                <p className="text-sm mt-0.5">{submitError}</p>
+              </div>
+            </div>
+          )}
+
           {/* Navigation Buttons */}
           <div className="flex flex-col-reverse sm:flex-row justify-between sm:items-center gap-4 mt-10 pt-6 border-t border-slate-200">
             <Button
@@ -444,7 +665,9 @@ export default function NewRecommendation() {
 
             <Button
               onClick={handleNext}
-              disabled={!isCurrentStepValid() || isSubmitting}
+              disabled={
+                !isCurrentStepValid() || isSubmitting || !isBacktestDateValid
+              }
               className="w-full sm:w-auto h-12 px-8 text-base bg-blue-600 hover:bg-blue-700"
             >
               {isSubmitting ? (
@@ -454,11 +677,14 @@ export default function NewRecommendation() {
                 </span>
               ) : isConfirmStep ? (
                 <span className="flex items-center gap-2">
-                  Setuju & Jalankan Analisis <ArrowRight className="w-5 h-5" />
+                  {isBacktest
+                    ? "Setuju & Jalankan Simulasi"
+                    : "Setuju & Jalankan Analisis"}{" "}
+                  <ArrowRight className="w-5 h-5" />
                 </span>
               ) : step === totalSteps - 1 ? (
                 <span className="flex items-center gap-2">
-                  Selesaikan & Analisis <ArrowRight className="w-5 h-5" />
+                  Lihat Profil Risiko <ArrowRight className="w-5 h-5" />
                 </span>
               ) : (
                 <span className="flex items-center gap-2">
