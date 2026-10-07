@@ -28,7 +28,9 @@ export interface PortfolioData {
   user_id: string;
   fitness_score: number;
   sharpe_ratio: number;
-  expected_return: number;
+  // Backend mengirim null (nilai ini hanya dihitung saat generate, tidak
+  // disimpan di DB) — null-safe di seluruh pemakaian UI.
+  expected_return: number | null;
   max_drawdown: number;
   avg_correlation: number;
   skor_fundamental: number;

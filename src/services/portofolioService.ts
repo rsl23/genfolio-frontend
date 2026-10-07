@@ -60,6 +60,36 @@ export const portofolioService = {
       throw error;
     }
   },
+  /**
+   * Ambil SEMUA portofolio milik user (identitas dari JWT) pada mode terpilih.
+   * GET /api/v1/portfolios/my-portofolio/all
+   *
+   * Mode dibedakan backend lewat query param `backtest`:
+   * - backtest=false (default) -> portofolio LIVE
+   *       status "active" (terbaru) + "replaced" (sudah digantikan)
+   * - backtest=true            -> portofolio BACKTEST
+   *       status "active_backtest" + "replaced_backtest"
+   *
+   * Urutan: created_at terbaru dulu. User tanpa portofolio pada mode tsb
+   * menerima list kosong `[]`.
+   */
+  getAllMyPortofolios: async (
+    backtest = false,
+  ): Promise<ApiResponse<PortfolioData[]>> => {
+    try {
+      const response = await apiClient.get<ApiResponse<PortfolioData[]>>(
+        "/api/v1/portfolios/my-portfolio/all",
+        { params: { backtest } },
+      );
+      console.log(
+        "Response from /api/v1/portfolios/my-portofolio/all:",
+        response.data,
+      );
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
   priceHistory: async (): Promise<ApiResponse<MarketData>> => {
     try {
       const response = await apiClient.get<ApiResponse<MarketData>>(

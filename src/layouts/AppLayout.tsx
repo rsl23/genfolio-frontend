@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Sparkles,
   Settings,
+  History,
   LogOut,
   Menu,
   X,
@@ -17,6 +18,7 @@ export default function AppLayout() {
 
   const navItems = [
     { name: "Portofolio Saya", path: "/portfolio", icon: LayoutDashboard },
+    { name: "Riwayat Portofolio", path: "/portfolios", icon: History },
     { name: "Rekomendasi Baru", path: "/generate", icon: Sparkles },
     { name: "Pengaturan", path: "/settings", icon: Settings },
   ];

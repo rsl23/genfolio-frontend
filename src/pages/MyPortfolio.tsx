@@ -33,6 +33,7 @@ import {
   Check,
   FlaskConical,
   TrendingUp,
+  History,
 } from "lucide-react";
 import {
   PieChart,
@@ -188,6 +189,18 @@ async function settle<T>(
   }
 }
 
+/**
+ * true bila `status_portofolio` milik mode tertentu. Dipakai untuk memastikan
+ * portofolio yang dipilih dari halaman Riwayat Portofolio memang berasal dari
+ * mode yang sedang aktif (live vs backtest tidak pernah tercampur).
+ */
+function isStatusForMode(status: string, mode: PortfolioMode): boolean {
+  if (mode === "backtest") {
+    return status === "active_backtest" || status === "replaced_backtest";
+  }
+  return status === "active" || status === "replaced";
+}
+
 export default function MyPortfolio() {
   const location = useLocation();
   const state = location.state as {
@@ -197,6 +210,12 @@ export default function MyPortfolio() {
     mode?: PortfolioMode;
     dateRef?: string | null;
     portfolio?: PortfolioData | null;
+    /**
+     * Diisi halaman Riwayat Portofolio (/portfolios) saat user memilih satu
+     * portofolio tertentu — menandai agar `portfolio` di atas ditampilkan
+     * persis (bukan selalu portofolio terbaru) selama statusnya sesuai mode.
+     */
+    selectedPortfolioId?: string;
   } | null;
 
   // ===== Mode program: "live" (portofolio aktif) / "backtest" (simulasi) =====
@@ -254,6 +273,44 @@ export default function MyPortfolio() {
       setIsLoading(true);
       setFetchError(null);
       try {
+        // ===== Portofolio SPESIFIK dari halaman Riwayat Portofolio =====
+        // Saat user memilih satu portofolio di /portfolios, tampilkan persis
+        // portofolio itu (bisa berstatus "replaced" yang bukan terbaru).
+        // Syarat: id cocok dengan `selectedPortfolioId` DAN statusnya memang
+        // milik mode aktif — sehingga toggle Live/Backtest tetap konsisten
+        // dan tidak pernah menampilkan portofolio dari mode lain.
+        const selectedPortfolio =
+          state?.portfolio &&
+          state.portfolio.id === state.selectedPortfolioId &&
+          isStatusForMode(state.portfolio.status_portofolio, mode)
+            ? state.portfolio
+            : null;
+
+        if (selectedPortfolio) {
+          setPortfolio(selectedPortfolio);
+          if (mode === "backtest") {
+            const selectedDateRef =
+              selectedPortfolio.date_ref?.slice(0, 10) ?? null;
+            if (selectedDateRef) {
+              setDateRef(selectedDateRef);
+              setBacktestDateRef(selectedDateRef);
+            }
+            // Data pasar harian tidak tersedia untuk tanggal simulasi
+            setMarketData(null);
+            return;
+          }
+          // Mode live: tetap ambil harga pasar terkini untuk kolom "Harga Pasar"
+          setCachedPortfolio("live", selectedPortfolio);
+          const marketRes = await settle(portofolioService.priceHistory());
+          if (cancelled) return;
+          setMarketData(
+            marketRes.status === "fulfilled" && marketRes.value.data
+              ? marketRes.value.data
+              : null,
+          );
+          return;
+        }
+
         if (mode === "backtest") {
           // Mode simulasi TIDAK memakai endpoint live. Sumber portofolio:
           // 1) response GET /my-portofolio?backtest=true — sumber paling
@@ -666,12 +723,23 @@ export default function MyPortfolio() {
             Pantau dan evaluasi performa rekomendasi aset Anda.
           </p>
         </div>
-        <Link to="/generate" state={{ mode }} className="w-full md:w-auto">
-          <Button className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 h-11 px-6">
-            <Plus className="w-5 h-5 mr-2" />
-            Rekomendasi Baru
-          </Button>
-        </Link>
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+          <Link to="/portfolios" className="w-full sm:w-auto">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto h-11 px-6 bg-card"
+            >
+              <History className="w-5 h-5 mr-2" />
+              Riwayat Portofolio
+            </Button>
+          </Link>
+          <Link to="/generate" state={{ mode }} className="w-full sm:w-auto">
+            <Button className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 h-11 px-6">
+              <Plus className="w-5 h-5 mr-2" />
+              Rekomendasi Baru
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* ===== Toolbar: pilih program Live atau Backtest ===== */}
@@ -1233,7 +1301,7 @@ export default function MyPortfolio() {
                     Expected Return
                   </div>
                   <div className="text-2xl font-bold text-emerald-600">
-                    {portfolio
+                    {portfolio?.expected_return != null
                       ? `${(portfolio.expected_return * 100).toFixed(2)}%`
                       : "—"}
                   </div>
