@@ -6,6 +6,8 @@ import type {
   PortfolioPerformance,
   PortfolioPerformanceParams,
   GeneratePortofolioRequest,
+  RebalanceSeriesGenerateRequest,
+  RebalanceSeriesResult,
   UpdateHargaBeliRequest,
   HargaBeliUpdateResult,
 } from "@/types";
@@ -21,6 +23,7 @@ export const portofolioService = {
    * Body: `budget`, `risk_profile`, `backtest`, dan `date_ref` (wajib bila
    * `backtest = true`). Hasil backtest disimpan backend sebagai portofolio
    * berstatus `active_backtest` sehingga tidak mengubah portofolio live.
+   *
    */
   stockPortofolioGenerate: async (
     body: GeneratePortofolioRequest,
@@ -36,6 +39,23 @@ export const portofolioService = {
       // Lemparkan error ke komponen agar bisa ditampilkan ke UI
       throw error;
     }
+  },
+  /**
+   * Membentuk portofolio awal lalu menjalankan rebalance backtest berantai
+   * setiap X bulan hingga tanggal akhir simulasi.
+   * POST /api/v1/portfolios/generate-rebalance-series
+   */
+  generateRebalanceSeries: async (
+    body: RebalanceSeriesGenerateRequest,
+  ): Promise<ApiResponse<RebalanceSeriesResult>> => {
+    const response = await apiClient.post<ApiResponse<RebalanceSeriesResult>>(
+      "/api/v1/portfolios/generate-rebalance-series",
+      body,
+      // Satu series menjalankan GA berkali-kali; timeout default 15 detik
+      // tidak realistis untuk rentang simulasi yang panjang.
+      { timeout: 10 * 60_000 },
+    );
+    return response.data;
   },
   /**
    * Ambil portofolio aktif milik user (identitas dari JWT).

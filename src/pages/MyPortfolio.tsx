@@ -34,6 +34,7 @@ import {
   FlaskConical,
   TrendingUp,
   History,
+  Repeat,
 } from "lucide-react";
 import {
   PieChart,
@@ -56,6 +57,7 @@ import type {
   PortfolioMode,
   MarketData,
   PortfolioPerformance,
+  RebalanceDelta,
 } from "@/types";
 import { portofolioService } from "@/services/portofolioService";
 import {
@@ -73,6 +75,26 @@ import {
 } from "@/lib/portfolioMode";
 
 const COLORS = ["#117a58", "#e0a83a", "#2b8a9a", "#c25b3a", "#8b5cf6"];
+
+/** Badge warna untuk aksi rebalance (BUY / SELL / HOLD) */
+function RebalanceActionBadge({
+  action,
+}: {
+  action: RebalanceDelta["action"];
+}) {
+  const styles: Record<RebalanceDelta["action"], string> = {
+    BUY: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    SELL: "bg-red-100 text-red-800 border-red-200",
+    HOLD: "bg-slate-100 text-slate-700 border-slate-200",
+  };
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${styles[action]}`}
+    >
+      {action}
+    </span>
+  );
+}
 
 interface PortfolioItem {
   name: string;
@@ -100,8 +122,8 @@ const MAX_CHART_POINTS = 150;
 
 interface ChartPoint {
   date: string;
-  portfolio: number;
-  ihsg: number;
+  portfolio: number | null;
+  ihsg: number | null;
 }
 
 /**
@@ -139,7 +161,9 @@ const PerformanceChart = memo(function PerformanceChart({
           domain={["auto", "auto"]}
         />
         <RechartsTooltip
-          formatter={(value) => `${Number(value).toFixed(2)}%`}
+          formatter={(value) =>
+            value == null ? "Data tidak tersedia" : `${Number(value).toFixed(2)}%`
+          }
           cursor={{ stroke: "#d8d0bf", strokeWidth: 1, strokeDasharray: "4 4" }}
         />
         <Legend
@@ -249,6 +273,19 @@ export default function MyPortfolio() {
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [performanceError, setPerformanceError] = useState<string | null>(null);
+  // ===== Rebalance series (khusus backtest) =====
+  // Endpoint backend membentuk portofolio awal di start_date, lalu menjalankan
+  // rebalance berantai setiap X bulan sampai end_date.
+  const [rebalanceStartDate, setRebalanceStartDate] = useState(
+    () => state?.dateRef ?? getBacktestDateRef() ?? BACKTEST_DATA_MIN,
+  );
+  const [rebalanceEndDate, setRebalanceEndDate] = useState(() =>
+    defaultBacktestEndDate(),
+  );
+  const [rebalanceIntervalMonths, setRebalanceIntervalMonths] = useState(3);
+  const [isRunningRebalance, setIsRunningRebalance] = useState(false);
+  const [rebalanceError, setRebalanceError] = useState<string | null>(null);
+  const [rebalanceSummary, setRebalanceSummary] = useState<string | null>(null);
 
   /** Ganti mode program (Live <-> Backtest) dan simpan preferensinya. */
   const handleModeChange = (next: PortfolioMode) => {
@@ -486,6 +523,71 @@ export default function MyPortfolio() {
     }
   }, [portfolio]);
 
+  // Ikuti tanggal portofolio backtest yang sedang dipilih sebagai default
+  // start series, selama user belum mengubah inputnya sendiri.
+  useEffect(() => {
+    if (mode === "backtest" && dateRef) {
+      setRebalanceStartDate(dateRef);
+    }
+  }, [mode, dateRef]);
+
+  const rebalanceIntervalValid =
+    Number.isInteger(rebalanceIntervalMonths) &&
+    rebalanceIntervalMonths >= 1 &&
+    rebalanceIntervalMonths <= 12;
+  const rebalanceDateRangeValid =
+    rebalanceStartDate >= BACKTEST_DATA_MIN &&
+    rebalanceStartDate <= BACKTEST_DATA_MAX &&
+    rebalanceEndDate >= rebalanceStartDate &&
+    rebalanceEndDate <= BACKTEST_DATA_MAX;
+
+  const runRebalanceSeries = async () => {
+    if (!portfolio || !rebalanceIntervalValid || !rebalanceDateRangeValid) {
+      return;
+    }
+
+    setIsRunningRebalance(true);
+    setRebalanceError(null);
+    setRebalanceSummary(null);
+    try {
+      const response = await portofolioService.generateRebalanceSeries({
+        budget: portfolio.budget,
+        risk_profile: portfolio.risk_profile,
+        start_date: rebalanceStartDate,
+        end_date: rebalanceEndDate,
+        interval_months: rebalanceIntervalMonths,
+      });
+
+      if (response.status !== "success" || !response.data) {
+        throw new Error(response.message || "Backend tidak mengembalikan hasil rebalance.");
+      }
+
+      const latest = response.data.portfolios.at(-1) ?? null;
+      if (latest) {
+        setPortfolio(latest);
+        setCachedPortfolio("backtest", latest);
+        const latestDate = latest.date_ref?.slice(0, 10) ?? rebalanceEndDate;
+        setDateRef(latestDate);
+        setBacktestDateRef(latestDate);
+      }
+      setRebalanceSummary(
+        `${response.data.portfolios.length} portofolio berhasil dibuat dari ` +
+          `${response.data.scheduled_dates.length} tanggal terjadwal` +
+          (response.data.skipped.length
+            ? `; ${response.data.skipped.length} tanggal dilewati.`
+            : "."),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Gagal menjalankan rebalance series. Coba lagi.";
+      setRebalanceError(message);
+    } finally {
+      setIsRunningRebalance(false);
+    }
+  };
+
   // ===== Data tampilan: pakai data asli dari backend, fallback ke mock =====
   const isMock = !portfolio;
   const formData = state?.formData || {
@@ -496,11 +598,6 @@ export default function MyPortfolio() {
   const riskProfile =
     portfolio?.risk_profile ?? state?.riskProfile ?? "Konservatif";
   const budget = portfolio?.budget ?? Number(formData.capital);
-
-  const formattedCapital = new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-  }).format(budget);
 
   const formattedRupiah = (value: number) =>
     new Intl.NumberFormat("id-ID", {
@@ -672,8 +769,14 @@ export default function MyPortfolio() {
         // Backend mode backtest mengirim "2024-06-28T00:00:00" — ambil
         // bagian tanggalnya saja agar label sumbu X & tooltip bersih.
         date: p.date.slice(0, 10),
-        portfolio: Math.round(p.portfolio_return * 10000) / 100, // desimal -> %
-        ihsg: Math.round((p.ihsg_return ?? 0) * 10000) / 100,
+        portfolio:
+          p.portfolio_return == null
+            ? null
+            : Math.round(p.portfolio_return * 10000) / 100, // desimal -> %
+        ihsg:
+          p.ihsg_return == null
+            ? null
+            : Math.round(p.ihsg_return * 10000) / 100,
       })) ?? [];
     if (raw.length <= MAX_CHART_POINTS) return raw;
     const step = Math.ceil(raw.length / MAX_CHART_POINTS);
@@ -692,18 +795,17 @@ export default function MyPortfolio() {
   // IHSG: SELALU kuning tetap (#e0a83a, didefinisikan di PerformanceChart)
   // sebagai benchmark agar tidak pernah sama dengan garis portofolio.
   const portfolioLineColor =
-    lastPoint && lastPoint.portfolio < 0 ? "#dc2626" : "#117a58"; // merah / hijau
+    lastPoint?.portfolio != null && lastPoint.portfolio < 0
+      ? "#dc2626"
+      : "#117a58"; // merah / hijau
 
-  // ===== Floating Profit / Loss =====
-  // Dihitung dari Dana Terpakai x return terakhir portofolio (harian)
-  const lastPortfolioReturn =
-    performance && performance.series.length > 0
-      ? performance.series[performance.series.length - 1].portfolio_return
+  // Semua nilai P/L dari endpoint memakai NAV accounting: kas tidak hilang
+  // ketika saham dijual saat rebalance, berbeda dari estimasi return × modal.
+  const totalPnl =
+    performance?.realized_pnl != null && performance.unrealized_pnl != null
+      ? performance.realized_pnl + performance.unrealized_pnl
       : null;
-  const floatingPL =
-    portfolio && lastPortfolioReturn !== null
-      ? portfolio.total_terpakai * lastPortfolioReturn
-      : null;
+  const latestPerformancePoint = performance?.series.at(-1) ?? null;
 
   // ===== Batas date picker end_date (mode backtest) =====
   // Minimal HARI SETELAH tanggal simulasi (date_ref + 1) agar kurva punya
@@ -839,8 +941,129 @@ export default function MyPortfolio() {
             <code>active_backtest</code>), kurva performa dihitung sampai{" "}
             {performance?.end_date?.slice(0, 10) ?? endDate}. Harga pasar harian
             tidak ditampilkan dan edit harga beli hanya tersedia di mode Live.
+            {portfolio?.rebalance_deltas &&
+              portfolio.rebalance_deltas.length > 0 && (
+                <>
+                  {" "}
+                  Rebalance periodik sudah diterapkan pada portofolio ini —
+                  kurva performa sudah memperhitungkan hasil rebalance.
+                </>
+              )}
           </p>
         </div>
+      )}
+
+      {/* ===== Rebalance series (khusus mode backtest) ===== */}
+      {mode === "backtest" && portfolio && (
+        <Card className="shadow-sm border-slate-200">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Repeat className="w-5 h-5 text-slate-500" /> Jalankan Rebalance Backtest
+            </CardTitle>
+            <CardDescription>
+              Sistem akan membentuk portofolio awal pada tanggal mulai, lalu
+              menjalankan rebalance berantai setiap X bulan hingga tanggal akhir.
+              Portofolio live tidak akan berubah.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="rebalance-start-date" className="text-xs font-medium text-slate-600">
+                  Tanggal Mulai
+                </Label>
+                <Input
+                  id="rebalance-start-date"
+                  type="date"
+                  min={BACKTEST_DATA_MIN}
+                  max={BACKTEST_DATA_MAX}
+                  value={rebalanceStartDate}
+                  disabled={isRunningRebalance}
+                  onChange={(e) => setRebalanceStartDate(e.target.value)}
+                  className="h-9 bg-card"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rebalance-end-date" className="text-xs font-medium text-slate-600">
+                  Tanggal Akhir
+                </Label>
+                <Input
+                  id="rebalance-end-date"
+                  type="date"
+                  min={rebalanceStartDate || BACKTEST_DATA_MIN}
+                  max={BACKTEST_DATA_MAX}
+                  value={rebalanceEndDate}
+                  disabled={isRunningRebalance}
+                  onChange={(e) => setRebalanceEndDate(e.target.value)}
+                  className="h-9 bg-card"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rebalance-interval" className="text-xs font-medium text-slate-600">
+                  Rebalance Setiap (bulan)
+                </Label>
+                <Input
+                  id="rebalance-interval"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={12}
+                  value={rebalanceIntervalMonths}
+                  disabled={isRunningRebalance}
+                  aria-invalid={!rebalanceIntervalValid}
+                  onChange={(e) =>
+                    setRebalanceIntervalMonths(
+                      e.target.value === "" ? 0 : Number(e.target.value),
+                    )
+                  }
+                  className="h-9 bg-card"
+                />
+              </div>
+            </div>
+
+            {!rebalanceDateRangeValid && (
+              <p className="text-xs text-red-600">
+                Pilih rentang tanggal valid antara {BACKTEST_DATA_MIN} dan {BACKTEST_DATA_MAX}; tanggal akhir tidak boleh lebih awal dari tanggal mulai.
+              </p>
+            )}
+            {!rebalanceIntervalValid && (
+              <p className="text-xs text-red-600">
+                Interval harus berupa bilangan bulat antara 1 dan 12 bulan.
+              </p>
+            )}
+
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-sm text-blue-900">
+              Menggunakan modal <strong>{formattedRupiah(portfolio.budget)}</strong> dan profil risiko <strong>{portfolio.risk_profile}</strong>. Proses dapat memakan waktu karena GA dijalankan untuk setiap periode.
+            </div>
+
+            {rebalanceError && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+                <strong>Rebalance gagal:</strong> {rebalanceError}
+              </div>
+            )}
+            {rebalanceSummary && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-800">
+                <strong>Rebalance series selesai.</strong> {rebalanceSummary}
+              </div>
+            )}
+
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                className="gap-2"
+                onClick={runRebalanceSeries}
+                disabled={isRunningRebalance || !rebalanceIntervalValid || !rebalanceDateRangeValid}
+              >
+                {isRunningRebalance ? (
+                  <><Activity className="w-4 h-4 animate-spin" /> Menjalankan Rebalance...</>
+                ) : (
+                  <><Repeat className="w-4 h-4" /> Jalankan Rebalance Series</>
+                )}
+              </Button>
+              <p className="text-xs text-slate-500">Hasil terakhir akan langsung ditampilkan di halaman ini.</p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {isMock && mode === "live" && !fetchError && !isLoading && (
@@ -859,17 +1082,27 @@ export default function MyPortfolio() {
         <Card className="shadow-sm border-slate-200">
           <CardContent className="p-6">
             <p className="text-sm font-medium text-slate-500 mb-1">
-              Total Modal Dialokasikan
+              Modal Awal
             </p>
             <p className="text-2xl font-bold text-slate-900">
-              {formattedCapital}
+              {formattedRupiah(performance?.initial_capital ?? budget)}
             </p>
-            {portfolio && (
+            {performance?.final_nav != null ? (
+              <p className="text-xs text-slate-500 mt-2">
+                Nilai portofolio kini {formattedRupiah(performance.final_nav)}
+                {performance.total_return_pct != null && (
+                  <>
+                    {" · "}
+                    Return {performance.total_return_pct.toFixed(2)}%
+                  </>
+                )}
+              </p>
+            ) : portfolio ? (
               <p className="text-xs text-slate-500 mt-2">
                 Terpakai {formattedRupiah(portfolio.total_terpakai)} &middot;
                 Sisa {formattedRupiah(portfolio.sisa_budget)}
               </p>
-            )}
+            ) : null}
           </CardContent>
         </Card>
         <Card className="shadow-sm border-slate-200">
@@ -881,41 +1114,45 @@ export default function MyPortfolio() {
               <span className="flex h-3 w-3 rounded-full bg-blue-500"></span>
               <p className="text-2xl font-bold text-slate-900">{riskProfile}</p>
             </div>
+            {performance && (
+              <p className="text-xs text-slate-500 mt-2">
+                Dinilai s.d. {performance.end_date.slice(0, 10)}
+              </p>
+            )}
           </CardContent>
         </Card>
-        {/* Floating Profit / Loss */}
+        {/* P/L dari NAV accounting backend */}
         <Card className="shadow-sm border-slate-200">
           <CardContent className="p-6">
             <p className="text-sm font-medium text-slate-500 mb-1">
-              Floating Profit / Loss
+              Profit / Loss Portofolio
             </p>
-            {floatingPL !== null ? (
+            {totalPnl !== null ? (
               <>
                 <div
                   className={`flex items-center gap-2 text-2xl font-bold ${
-                    floatingPL >= 0 ? "text-emerald-600" : "text-red-600"
+                    totalPnl >= 0 ? "text-emerald-600" : "text-red-600"
                   }`}
                 >
-                  {floatingPL >= 0 ? (
+                  {totalPnl >= 0 ? (
                     <TrendingUp className="w-6 h-6" />
                   ) : (
                     <TrendingDown className="w-6 h-6" />
                   )}
-                  <span className={floatingPL >= 0 ? "" : ""}>
-                    {floatingPL >= 0 ? "+" : "-"}
-                    {formattedRupiah(Math.abs(floatingPL))}
+                  <span>
+                    {totalPnl >= 0 ? "+" : "-"}
+                    {formattedRupiah(Math.abs(totalPnl))}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-2">
-                  Return{" "}
-                  {lastPortfolioReturn !== null
-                    ? (lastPortfolioReturn * 100).toFixed(2)
-                    : "0.00"}
-                  % dari Dana Terpakai
+                  Realisasi {formattedRupiah(performance?.realized_pnl ?? 0)}
+                  {" · "}Belum terealisasi {formattedRupiah(performance?.unrealized_pnl ?? 0)}
                 </p>
               </>
             ) : (
-              <p className="text-2xl font-bold text-slate-400">&mdash;</p>
+              <p className="text-sm text-slate-400">
+                P/L belum dapat dihitung dari data harga.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -979,16 +1216,42 @@ export default function MyPortfolio() {
                     </span>
                   </>
                 )}
-                {lastPoint && (
+                {lastPoint?.portfolio != null && (
                   <>
                     <br />
                     Return terakhir: Portofolio {lastPoint.portfolio.toFixed(2)}
-                    % vs IHSG {lastPoint.ihsg.toFixed(2)}%
+                    %{lastPoint.ihsg != null ? ` vs IHSG ${lastPoint.ihsg.toFixed(2)}%` : ""}
                   </>
                 )}
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {performance?.final_nav != null && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5 text-sm">
+                  <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                    <p className="text-xs text-slate-500">Nilai saham</p>
+                    <p className="font-semibold text-slate-900 mt-1">
+                      {latestPerformancePoint?.holdings_market_value != null
+                        ? formattedRupiah(latestPerformancePoint.holdings_market_value)
+                        : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                    <p className="text-xs text-slate-500">Kas tersedia</p>
+                    <p className="font-semibold text-slate-900 mt-1">
+                      {latestPerformancePoint?.cash_balance != null
+                        ? formattedRupiah(latestPerformancePoint.cash_balance)
+                        : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
+                    <p className="text-xs text-blue-700">Nilai portofolio</p>
+                    <p className="font-semibold text-blue-900 mt-1">
+                      {formattedRupiah(performance.final_nav)}
+                    </p>
+                  </div>
+                </div>
+              )}
               {hasPerformanceData ? (
                 <div className="h-[280px] w-full">
                   <PerformanceChart
@@ -1009,6 +1272,30 @@ export default function MyPortfolio() {
                         : "Response endpoint berhasil tetapi 'series' kosong. Periksa Network tab (request /portofolio_performance) dan console browser untuk detail."}
                     </p>
                   </div>
+                </div>
+              )}
+              {performance && (
+                <div className="mt-4 space-y-2 text-xs">
+                  {performance.start_date_adjusted && (
+                    <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      Perhitungan dimulai pada {performance.start_date.slice(0, 10)} karena tanggal portofolio yang diminta ({performance.requested_start_date.slice(0, 10)}) bukan hari harga yang tersedia.
+                    </p>
+                  )}
+                  {performance.missing_price_tickers.length > 0 && (
+                    <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      Harga tidak tersedia untuk: {performance.missing_price_tickers.join(", ")}.
+                    </p>
+                  )}
+                  {performance.accounting_limitations.length > 0 && (
+                    <details className="text-slate-500">
+                      <summary className="cursor-pointer">Catatan perhitungan performa</summary>
+                      <ul className="list-disc pl-5 mt-1 space-y-1">
+                        {performance.accounting_limitations.map((limitation) => (
+                          <li key={limitation}>{limitation}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -1248,6 +1535,90 @@ export default function MyPortfolio() {
               </Table>
             </CardContent>
           </Card>
+
+          {/* Rincian Rebalance (hanya bila portofolio dibuat dengan rebalance) */}
+          {portfolio?.rebalance_deltas &&
+            portfolio.rebalance_deltas.length > 0 && (
+              <Card className="shadow-sm border-slate-200">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Repeat className="w-5 h-5 text-slate-500" /> Rincian
+                    Rebalance
+                  </CardTitle>
+                  <CardDescription>
+                    Perubahan posisi (Buy/Sell/Hold) hasil rebalance terakhir
+                    {mode === "backtest" && dateRef
+                      ? ` — simulasi per ${dateRef}`
+                      : ""}
+                    . Kurva performa di halaman ini sudah memperhitungkan
+                    hasil rebalance.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="whitespace-nowrap">
+                          Kode Emiten
+                        </TableHead>
+                        <TableHead className="whitespace-nowrap">
+                          Aksi
+                        </TableHead>
+                        <TableHead className="text-right whitespace-nowrap">
+                          Lot Lama
+                        </TableHead>
+                        <TableHead className="text-right whitespace-nowrap">
+                          Lot Baru
+                        </TableHead>
+                        <TableHead className="text-right whitespace-nowrap">
+                          Selisih Lot
+                        </TableHead>
+                        <TableHead className="whitespace-nowrap">
+                          Alasan
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {portfolio.rebalance_deltas.map((delta) => (
+                        <TableRow key={delta.kode}>
+                          <TableCell className="font-bold text-slate-900 whitespace-nowrap">
+                            {delta.kode}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap">
+                            <RebalanceActionBadge action={delta.action} />
+                          </TableCell>
+                          <TableCell className="text-right text-slate-600 whitespace-nowrap">
+                            {delta.old_lot} Lot
+                          </TableCell>
+                          <TableCell className="text-right text-slate-600 whitespace-nowrap">
+                            {delta.new_lot} Lot
+                          </TableCell>
+                          <TableCell
+                            className={`text-right font-semibold whitespace-nowrap ${
+                              delta.action === "BUY"
+                                ? "text-emerald-600"
+                                : delta.action === "SELL"
+                                  ? "text-red-600"
+                                  : "text-slate-500"
+                            }`}
+                          >
+                            {delta.action === "BUY"
+                              ? "+"
+                              : delta.action === "SELL"
+                                ? "-"
+                                : ""}
+                            {delta.delta_lot} Lot
+                          </TableCell>
+                          <TableCell className="text-slate-600 text-sm">
+                            {delta.reason}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
 
           {/* Fitness Metrics */}
           <Card className="shadow-sm border-slate-200">

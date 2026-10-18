@@ -19,6 +19,18 @@ export interface GeneratePortofolioRequest {
   date_ref?: string;
 }
 
+/** Body POST /api/v1/portfolios/generate-rebalance-series. */
+export interface RebalanceSeriesGenerateRequest {
+  budget: number;
+  risk_profile: RiskProfile | string;
+  /** Tanggal pembentukan portofolio awal, format YYYY-MM-DD. */
+  start_date: string;
+  /** Batas akhir simulasi, format YYYY-MM-DD dan inklusif. */
+  end_date: string;
+  /** Rebalance dilakukan setiap X bulan; backend menerima 1 sampai 12. */
+  interval_months: number;
+}
+
 export interface FormData extends Record<string, string> {
   capital: string;
 }
@@ -45,6 +57,39 @@ export interface PortfolioData {
   budget: number;
   allocations: Array<PortofolioItem>;
   narasi_llm: string;
+  /**
+   * Daftar perubahan posisi hasil rebalance (field baru backend).
+   * Hanya ada bila portofolio dibuat dengan `rebalance = true`.
+   * Berisi aksi BUY / SELL / HOLD per kode emiten beserta selisih lotnya.
+   */
+  rebalance_deltas?: RebalanceDelta[];
+}
+
+/** Satu baris perubahan posisi pada rebalance (field `rebalance_deltas`) */
+export interface RebalanceDelta {
+  kode: string;
+  action: "BUY" | "SELL" | "HOLD";
+  old_lot: number;
+  new_lot: number;
+  /** Selisih lot (old_lot - new_lot); positif = penjualan bersih. */
+  delta_lot: number;
+  reason: string;
+}
+
+/** Satu tanggal rebalance yang tidak dapat diproses backend. */
+export interface SkippedRebalanceStep {
+  date: string;
+  reason: string;
+}
+
+/** Respons data POST /generate-rebalance-series. */
+export interface RebalanceSeriesResult {
+  start_date: string;
+  end_date: string;
+  interval_months: number;
+  scheduled_dates: string[];
+  portfolios: PortfolioData[];
+  skipped: SkippedRebalanceStep[];
 }
 
 export interface PortofolioItem {
@@ -133,8 +178,20 @@ export interface MarketData {
 
 export interface PerformancePoint {
   date: string; // "2026-09-04"; mode backtest bisa "2024-06-28T00:00:00" (datetime)
-  portfolio_value: number; // nilai portofolio hari itu, dalam Rupiah
-  portfolio_return: number; // return kumulatif portofolio, desimal (0.012 = +1.2%)
+  /** NAV harian = nilai saham + kas, dalam Rupiah. */
+  portfolio_value: number | null;
+  /** Kas tersisa setelah snapshot/rebalance pada hari tersebut, dalam Rupiah. */
+  cash_balance: number | null;
+  /** Nilai pasar seluruh saham yang masih dipegang, dalam Rupiah. */
+  holdings_market_value: number | null;
+  /** Return hari itu sebagai desimal; null pada titik pertama. */
+  daily_return: number | null;
+  /** Return kumulatif dari modal awal sebagai desimal. */
+  portfolio_return: number | null;
+  /** Akumulasi P/L terealisasi dari penjualan/rebalance. */
+  realized_pnl_cumulative: number | null;
+  /** P/L belum terealisasi pada saham yang masih dipegang. */
+  unrealized_pnl: number | null;
   ihsg_return: number | null; // return kumulatif IHSG, desimal; null jika belum tersinkron
 }
 
@@ -166,8 +223,25 @@ export interface PortfolioPerformanceParams {
 
 /** Respons data dari GET /api/v1/portfolios/portofolio_performance/{portfolio_id} */
 export interface PortfolioPerformance {
-  start_date: string; // tanggal pembuatan portofolio aktif
-  end_date: string; // tanggal data terbaru (saham/IHSG)
+  /** Hari harga pertama yang benar-benar dapat dihitung. */
+  start_date: string;
+  /** Tanggal snapshot portofolio pertama yang diminta. */
+  requested_start_date: string;
+  /** True bila backend menggeser tanggal mulai ke hari pasar yang tersedia. */
+  start_date_adjusted: boolean;
+  end_date: string;
   holdings: Record<string, number>; // { "BBCA": 2, "BBRI": 5 } — jumlah lot per emiten
+  missing_price_tickers: string[];
+  initial_capital: number | null;
+  final_nav: number | null;
+  /** Persentase return total, sudah dikali 100. */
+  total_return_pct: number | null;
+  realized_pnl: number | null;
+  unrealized_pnl: number | null;
+  /** Belum didukung backend; bernilai null, bukan nol. */
+  dividend_income: number | null;
+  /** Belum didukung backend; bernilai null, bukan nol. */
+  transaction_costs: number | null;
+  accounting_limitations: string[];
   series: PerformancePoint[];
 }

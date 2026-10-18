@@ -188,7 +188,6 @@ export default function NewRecommendation() {
     ),
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
-
   const isBacktest = mode === "backtest";
   // date_ref wajib dan harus berada dalam rentang tanggal yang boleh dipilih
   // user (BACKTEST_PICKER_MIN..BACKTEST_PICKER_MAX) supaya GA tidak gagal
@@ -666,7 +665,9 @@ export default function NewRecommendation() {
             <Button
               onClick={handleNext}
               disabled={
-                !isCurrentStepValid() || isSubmitting || !isBacktestDateValid
+                !isCurrentStepValid() ||
+                isSubmitting ||
+                !isBacktestDateValid
               }
               className="w-full sm:w-auto h-12 px-8 text-base bg-blue-600 hover:bg-blue-700"
             >
