@@ -2,14 +2,20 @@ import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RupiahInput } from "@/components/ui/rupiah-input";
+import { parseRupiahInput } from "@/lib/rupiahInput";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import PortfolioModeToggle from "@/components/PortfolioModeToggle";
-import { ArrowRight, Activity, AlertCircle, ArrowLeft, Info } from "lucide-react";
+import BearMarketDialog from "@/components/BearMarketDialog";
+import { ArrowRight, Activity, AlertCircle, ArrowLeft } from "lucide-react";
 import type {
   GeneratePortofolioRequest,
   PortfolioMode,
   RiskProfile,
+  BearChoice,
+  BearMarketAssessment,
+  BearPolicy,
 } from "@/types";
 import questionsData from "@/data/questions.json";
 import { portofolioService } from "@/services/portofolioService";
@@ -53,7 +59,10 @@ const questionnaireJson = questionsData as Question[];
  */
 function describeApiError(error: unknown): string {
   const err = error as {
-    response?: { status?: number; data?: { detail?: unknown; message?: string } };
+    response?: {
+      status?: number;
+      data?: { detail?: unknown; message?: string };
+    };
     message?: string;
   };
   const data = err?.response?.data;
@@ -121,7 +130,7 @@ interface DimensionResult {
  *    Finansial >= 3, dan Pengalaman >= 2 (otomatis terpenuhi oleh
  *    dua aturan di atas).
  */
-export function determineRiskProfile(
+function determineRiskProfile(
   payload: Record<string, { value: string; score?: number }>,
 ): DimensionResult {
   // Total skor per dimensi
@@ -174,7 +183,12 @@ export default function NewRecommendation() {
   const [answers, setAnswers] = useState<Record<string, string>>({
     capital: "", // inisialisasi default agar selalu ada untuk type safety
   });
+  const [portfolioName, setPortfolioName] = useState("");
+  const [portfolioDescription, setPortfolioDescription] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [bearPreview, setBearPreview] = useState<BearMarketAssessment | null>(null);
+  const [bearPolicy, setBearPolicy] = useState<BearPolicy>("manual");
   // Profil risiko pilihan user jika override hasil kuis (null = pakai hasil kuis)
   const [overrideProfile, setOverrideProfile] = useState<RiskProfile>(null);
   // ===== Mode program: "live" (data pasar terbaru) / "backtest" (historis) =====
@@ -247,11 +261,35 @@ export default function NewRecommendation() {
     if (step < totalSteps) {
       setStep(step + 1); // masuk/berpindah ke layar konfirmasi
     } else {
-      await handleSubmit();
+      await openBearDialog();
     }
   };
 
-  const handleSubmit = async () => {
+  const openBearDialog = async () => {
+    setIsPreviewing(true);
+    setSubmitError(null);
+    try {
+      const [policy, preview] = await Promise.all([
+        portofolioService.getBearPolicy(),
+        portofolioService.previewBearMarket({
+          risk_profile: finalProfile ?? "Moderat",
+          backtest: isBacktest,
+          ...(isBacktest ? { date_ref: backtestDate } : {}),
+        }),
+      ]);
+      setBearPolicy(policy);
+      setBearPreview(preview);
+    } catch (error) {
+      setSubmitError(describeApiError(error));
+    } finally {
+      setIsPreviewing(false);
+    }
+  };
+
+  const handleSubmit = async (
+    policy: BearPolicy, choices: Record<string, BearChoice>,
+  ) => {
+    if (!bearPreview) return;
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -276,19 +314,23 @@ export default function NewRecommendation() {
     });
 
     try {
+      if (policy !== bearPolicy) await portofolioService.setBearPolicy(policy);
       // Body mengikuti PortfolioGenerateRequest backend: mode backtest wajib
       // menyertakan date_ref; mode live tidak mengirim date_ref sama sekali.
       const apiPayload: GeneratePortofolioRequest = {
-        budget: Number(answers.capital),
+        budget: parseRupiahInput(answers.capital),
+        name_portofolio: portfolioName.trim(),
+        description: portfolioDescription.trim() || null,
         risk_profile: finalProfile,
         answers: finalPayload,
         backtest: isBacktest,
+        bear_management: true,
+        bear_choice: choices[bearPreview.requested_date],
+        bear_preview_as_of: bearPreview.as_of,
+        bear_preview_fingerprint: bearPreview.fingerprint,
         ...(isBacktest ? { date_ref: backtestDate } : {}),
       };
-      console.log(
-        `Payload ke GA (mode ${mode}):`,
-        apiPayload,
-      );
+      console.log(`Payload ke GA (mode ${mode}):`, apiPayload);
 
       const response =
         await portofolioService.stockPortofolioGenerate(apiPayload);
@@ -314,7 +356,7 @@ export default function NewRecommendation() {
           : null;
       navigate("/portfolio", {
         state: {
-          formData: { capital: answers.capital },
+          formData: { capital: String(parseRupiahInput(answers.capital)) },
           riskProfile: finalProfile,
           mode,
           dateRef: backendDateRef ?? (isBacktest ? backtestDate : null),
@@ -330,110 +372,151 @@ export default function NewRecommendation() {
   };
 
   const isCurrentStepValid = () => {
-    if (isConfirmStep) return true; // layar konfirmasi selalu valid
+    if (isConfirmStep)
+      return (
+        portfolioName.trim().length > 0 &&
+        portfolioName.trim().length <= 80 &&
+        portfolioDescription.length <= 500
+      );
     const val = answers[currentQuestion.id];
+    if (currentQuestion.type === "number") {
+      return (
+        Number.isFinite(parseRupiahInput(val || "")) &&
+        parseRupiahInput(val || "") > 0
+      );
+    }
     return val !== undefined && val.trim() !== "";
   };
 
   return (
-    <div className="min-h-full bg-card rounded-2xl shadow-card border border-border p-4 md:p-8 lg:p-12">
-      <div className="max-w-3xl mx-auto">
-        {/* Header Steps Dinamis */}
-        <div className="mb-12">
-          <h1 className="text-3xl font-bold text-slate-900 mb-4">
-            Mulai Rekomendasi Baru
+    <div className="mx-auto max-w-3xl pb-10 animate-in fade-in duration-500">
+      <div className="space-y-6">
+        <header>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+            Rekomendasi
+          </p>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
+            Rekomendasi Baru
           </h1>
-          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-            {questionnaireJson.map((q, idx) => (
-              <div key={q.id} className="flex items-center gap-2">
-                <span
-                  className={`px-3 py-1 rounded-full ${step >= idx ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-400"}`}
-                >
-                  {idx + 1}. {q.stepLabel}
-                </span>
-                {idx < totalSteps - 1 && (
-                  <span className="text-slate-300">/</span>
-                )}
-              </div>
-            ))}
+          <p className="mt-1 text-sm text-slate-500">
+            Jawab beberapa pertanyaan untuk menyesuaikan portofolio dengan
+            kebutuhan Anda.
+          </p>
+        </header>
+
+        <div
+          aria-label={`Langkah ${step + 1} dari ${totalSteps + 1}`}
+          className="rounded-2xl border border-slate-200 bg-card px-5 py-4"
+        >
+          <div className="mb-3 flex items-center justify-between gap-3 text-xs">
+            <span className="font-semibold text-slate-800">
+              {isConfirmStep ? "Konfirmasi" : currentQuestion.stepLabel}
+            </span>
+            <span className="tabular-nums text-slate-500">
+              {step + 1} / {totalSteps + 1}
+            </span>
           </div>
-          {!isConfirmStep && (
-            <p className="mt-4 text-xs text-slate-500">
-              Pilihan mode program (Live atau Backtest) muncul di langkah
-              terakhir, bersamaan dengan hasil profil risiko Anda.
-            </p>
-          )}
+          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-300"
+              style={{ width: `${((step + 1) / (totalSteps + 1)) * 100}%` }}
+            />
+          </div>
         </div>
 
-        {isConfirmStep && isBacktest && (
-          <div className="mb-8 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-amber-800">
-            <Info className="w-5 h-5 shrink-0 mt-0.5" />
-            <p className="text-sm">
-              <strong>Mode Backtest:</strong> GA dijalankan memakai data
-              historis per {backtestDate}. Hasilnya disimpan sebagai portofolio
-              simulasi (status <code>active_backtest</code>) sehingga{" "}
-              <strong>portofolio live Anda tidak berubah</strong>.
-            </p>
-          </div>
-        )}
-
         {/* Content Box */}
-        <div className="bg-slate-50 border rounded-2xl p-6 md:p-10 shadow-sm min-h-[400px] flex flex-col justify-between">
+        <div className="flex min-h-[400px] flex-col justify-between rounded-2xl border border-slate-200 bg-card p-5 shadow-sm md:p-8">
           <div className="flex-1">
             {isConfirmStep ? (
               /* ================= LAYAR KONFIRMASI PROFIL RISIKO ================= */
-              <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
-                <div className="text-center">
-                  <h2 className="text-2xl font-semibold mb-3">
-                    Profil Risiko Anda
+              <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+                <div>
+                  <h2 className="text-xl font-semibold text-slate-900">
+                    Konfirmasi rekomendasi
                   </h2>
-                  <p className="text-slate-500 text-lg">
-                    Berdasarkan jawaban kuesioner Anda, sistem menentukan profil
-                    risiko berikut. Silakan konfirmasi, atau ubah ke pilihan
-                    lain jika Anda merasa tidak cocok.
+                  <p className="mt-1 text-sm text-slate-500">
+                    Tinjau profil risiko dan pilih mode sebelum melanjutkan.
                   </p>
+                </div>
+
+                <div className="grid gap-4 rounded-2xl border border-slate-200 p-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="portfolio-name">
+                      Nama portofolio <span className="text-red-600">*</span>
+                    </Label>
+                    <Input
+                      id="portfolio-name"
+                      value={portfolioName}
+                      maxLength={80}
+                      onChange={(event) => setPortfolioName(event.target.value)}
+                      placeholder="Contoh: Portofolio Agresif"
+                      disabled={isSubmitting}
+                    />
+                    <p className="text-xs text-slate-500">
+                      Nama ini muncul di riwayat dan tetap dipakai saat
+                      rebalance.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="portfolio-description">
+                      Deskripsi{" "}
+                      <span className="font-normal text-slate-500">
+                        (opsional)
+                      </span>
+                    </Label>
+                    <textarea
+                      id="portfolio-description"
+                      value={portfolioDescription}
+                      maxLength={500}
+                      rows={2}
+                      onChange={(event) =>
+                        setPortfolioDescription(event.target.value)
+                      }
+                      disabled={isSubmitting}
+                      placeholder="Tujuan atau catatan singkat tentang portofolio ini"
+                      className="w-full resize-y rounded-lg border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 disabled:opacity-50"
+                    />
+                    <p className="text-right text-xs text-slate-400">
+                      {portfolioDescription.length}/500
+                    </p>
+                  </div>
                 </div>
 
                 {/* Badge profil hasil kuis */}
-                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 text-center">
-                  <p className="text-sm font-medium text-blue-600 mb-1">
-                    Hasil Analisis Kuesioner
+                <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
+                  <p className="text-xs font-medium text-slate-600">
+                    Profil berdasarkan jawaban Anda
                   </p>
-                  <p className="text-4xl font-bold text-blue-900">
+                  <p className="mt-1 text-2xl font-semibold text-primary">
                     {quizResult.riskProfile}
                   </p>
-                  <div className="flex flex-wrap justify-center gap-3 mt-4 text-xs text-slate-600">
-                    <span className="bg-white px-3 py-1 rounded-full border border-slate-200">
-                      Psikologis: Level {quizResult.levelPsikologis}
-                    </span>
-                    <span className="bg-white px-3 py-1 rounded-full border border-slate-200">
-                      Finansial: Level {quizResult.levelFinansial}
-                    </span>
-                    <span className="bg-white px-3 py-1 rounded-full border border-slate-200">
-                      Pengalaman: Level {quizResult.levelPengalaman}
-                    </span>
-                  </div>
                   {overrideProfile &&
                     overrideProfile !== quizResult.riskProfile && (
-                      <p className="text-xs text-amber-600 mt-4">
-                        Anda memilih profil sendiri (
-                        <strong>{overrideProfile}</strong> sebagai ganti hasil
-                        kuesioner <strong>{quizResult.riskProfile}</strong>).
+                      <p className="mt-2 text-xs text-slate-600">
+                        Pilihan Anda: <strong>{overrideProfile}</strong>
                       </p>
                     )}
+                  <details className="mt-3 text-xs text-slate-500">
+                    <summary className="cursor-pointer">
+                      Lihat dasar penilaian
+                    </summary>
+                    <p className="mt-2">
+                      Psikologis level {quizResult.levelPsikologis} · Finansial
+                      level {quizResult.levelFinansial} · Pengalaman level{" "}
+                      {quizResult.levelPengalaman}
+                    </p>
+                  </details>
                 </div>
 
                 {/* ===== Pilih Mode Program: Live / Backtest ===== */}
-                <div className="bg-card border border-slate-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row md:items-center gap-4">
+                <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 p-4 md:flex-row md:items-center">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">
-                      Pilih Mode Program
+                      Mode rekomendasi
                     </p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      <strong>Live</strong> memakai data pasar terbaru,{" "}
-                      <strong>Backtest</strong> menyimulasikan strategi pada
-                      tanggal historis. Kuesioner dan profil risiko di atas
-                      berlaku untuk kedua mode.
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Live memakai harga terkini; Backtest memakai data
+                      historis.
                     </p>
                   </div>
                   <div className="md:ml-auto flex flex-wrap items-end gap-4">
@@ -448,7 +531,7 @@ export default function NewRecommendation() {
                           htmlFor="date-ref"
                           className="text-xs font-medium text-slate-600"
                         >
-                          Tanggal Simulasi (date_ref)
+                          Tanggal simulasi
                         </Label>
                         <Input
                           id="date-ref"
@@ -464,51 +547,34 @@ export default function NewRecommendation() {
                           }}
                           className="h-9 w-44 bg-card"
                         />
-                        <p
-                          className={`text-[11px] ${
-                            isBacktestDateValid
-                              ? "text-slate-500"
-                              : "text-red-600"
-                          }`}
-                        >
-                          {isBacktestDateValid
-                            ? `Tanggal simulasi yang tersedia ${BACKTEST_PICKER_MIN} s/d ${BACKTEST_PICKER_MAX}.`
-                            : `Pilih tanggal antara ${BACKTEST_PICKER_MIN} dan ${BACKTEST_PICKER_MAX}.`}
-                        </p>
+                        {!isBacktestDateValid && (
+                          <p className="text-xs text-red-600">
+                            Pilih tanggal antara {BACKTEST_PICKER_MIN} dan{" "}
+                            {BACKTEST_PICKER_MAX}.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Ringkasan mode eksekusi */}
-                <div
-                  className={`rounded-2xl p-5 border text-sm ${
-                    isBacktest
-                      ? "bg-amber-50 border-amber-200 text-amber-900"
-                      : "bg-blue-50 border-blue-200 text-blue-900"
-                  }`}
-                >
-                  <p className="font-medium mb-1">
-                    Mode: {isBacktest ? "Simulasi Backtest" : "Live"}
-                  </p>
-                  <p className="leading-relaxed">
-                    {isBacktest
-                      ? `GA akan dijalankan memakai data historis per ${backtestDate}. Hasilnya tersimpan sebagai portofolio simulasi terpisah dan tidak mengubah portofolio live Anda.`
-                      : "GA akan dijalankan memakai data pasar terbaru untuk memperbarui portofolio live Anda."}
-                  </p>
-                </div>
+                <p className="text-xs text-slate-500">
+                  {isBacktest
+                    ? "Hasil simulasi disimpan terpisah; portofolio live tidak berubah."
+                    : "Rekomendasi live baru akan menggantikan portofolio live aktif."}
+                </p>
 
                 {/* Pilihan override */}
                 <div>
-                  <Label className="text-base mb-3 block">
-                    Gunakan profil ini untuk rekomendasi:
+                  <Label className="mb-3 block text-sm font-medium">
+                    Profil yang digunakan
                   </Label>
                   <RadioGroup
                     value={overrideProfile ?? quizResult.riskProfile ?? ""}
                     onValueChange={(val) =>
                       setOverrideProfile(val as RiskProfile)
                     }
-                    className="space-y-3 max-w-xl"
+                    className="grid gap-2 sm:grid-cols-3"
                   >
                     {(
                       ["Konservatif", "Moderat", "Agresif"] as RiskProfile[]
@@ -518,7 +584,7 @@ export default function NewRecommendation() {
                       return (
                         <div
                           key={profile}
-                          className={`flex items-center space-x-3 bg-card border p-5 rounded-xl cursor-pointer transition-colors ${
+                          className={`flex items-center gap-2 rounded-xl border p-3 transition-colors ${
                             (overrideProfile ?? quizResult.riskProfile) ===
                             profile
                               ? "border-blue-500 bg-blue-50/50"
@@ -528,16 +594,16 @@ export default function NewRecommendation() {
                           <RadioGroupItem
                             value={profile}
                             id={radioId}
-                            className="w-5 h-5"
+                            className="h-4 w-4"
                           />
                           <Label
                             htmlFor={radioId}
-                            className="cursor-pointer w-full text-base font-medium"
+                            className="w-full cursor-pointer text-sm font-medium"
                           >
                             {profile}
                             {isQuizResult && (
-                              <span className="ml-2 text-xs font-normal text-blue-600">
-                                (rekomendasi sistem dari kuesioner Anda)
+                              <span className="ml-1 text-[11px] font-normal text-primary">
+                                Disarankan
                               </span>
                             )}
                           </Label>
@@ -564,39 +630,35 @@ export default function NewRecommendation() {
                   {/* RENDER NUMBER INPUT */}
                   {currentQuestion.type === "number" && (
                     <div className="max-w-md">
-                      <Label className="text-base mb-3 block">Nominal</Label>
+                      <Label
+                        htmlFor={`answer-${currentQuestion.id}`}
+                        className="text-base mb-3 block"
+                      >
+                        Nominal
+                      </Label>
                       <div className="relative">
                         {currentQuestion.prefix && (
                           <span className="absolute left-4 top-3.5 text-slate-500 font-medium">
                             {currentQuestion.prefix}
                           </span>
                         )}
-                        <Input
-                          // 1. Ubah type menjadi text, tambahkan inputMode agar keyboard HP tetap memunculkan angka
-                          type="text"
-                          inputMode="numeric"
+                        <RupiahInput
+                          id={`answer-${currentQuestion.id}`}
                           placeholder={currentQuestion.placeholder}
                           className={`text-xl h-14 bg-card ${currentQuestion.prefix ? "pl-12" : "pl-4"}`}
-                          // 2. Format nilai yang diambil dari state agar memiliki titik
-                          value={
-                            answers[currentQuestion.id]
-                              ? new Intl.NumberFormat("id-ID").format(
-                                  Number(answers[currentQuestion.id]),
-                                )
-                              : ""
-                          }
-                          onChange={(e) => {
-                            // 3. Bersihkan semua karakter selain angka (menghapus titik saat diketik)
-                            const rawValue = e.target.value.replace(/\D/g, "");
-
-                            // 4. Simpan nilai mentahnya (integer/string angka) ke state, bukan nilai bertitiknya
+                          value={answers[currentQuestion.id] || ""}
+                          onValueChange={(value) => {
                             setAnswers({
                               ...answers,
-                              [currentQuestion.id]: rawValue,
+                              [currentQuestion.id]: value,
                             });
                           }}
                         />
                       </div>
+                      <p className="mt-2 text-xs text-slate-500">
+                        Titik untuk ribuan, koma untuk desimal. Contoh:
+                        50.000.000,50.
+                      </p>
                     </div>
                   )}
 
@@ -608,23 +670,23 @@ export default function NewRecommendation() {
                         onValueChange={(val) =>
                           setAnswers({ ...answers, [currentQuestion.id]: val })
                         }
-                        className="space-y-4 max-w-xl"
+                        className="max-w-xl space-y-2"
                       >
                         {currentQuestion.options.map((opt, idx) => {
                           const radioId = `${currentQuestion.id}-opt-${idx}`;
                           return (
                             <div
                               key={opt.value}
-                              className="flex items-center space-x-3 bg-card border border-border p-5 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+                              className="flex items-center gap-3 rounded-xl border border-slate-200 p-4 transition-colors hover:border-primary/50 hover:bg-primary/5"
                             >
                               <RadioGroupItem
                                 value={opt.value}
                                 id={radioId}
-                                className="w-5 h-5"
+                                className="h-4 w-4"
                               />
                               <Label
                                 htmlFor={radioId}
-                                className="cursor-pointer w-full text-base font-medium"
+                                className="w-full cursor-pointer text-sm font-medium leading-relaxed"
                               >
                                 {opt.label}
                               </Label>
@@ -652,12 +714,12 @@ export default function NewRecommendation() {
           )}
 
           {/* Navigation Buttons */}
-          <div className="flex flex-col-reverse sm:flex-row justify-between sm:items-center gap-4 mt-10 pt-6 border-t border-slate-200">
+          <div className="mt-8 flex flex-col-reverse justify-between gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:items-center">
             <Button
               variant="outline"
               onClick={() => setStep(step > 0 ? step - 1 : 0)}
-              disabled={step === 0 || isSubmitting}
-              className="w-full sm:w-auto h-12 px-6 text-base"
+              disabled={step === 0 || isSubmitting || isPreviewing}
+              className="h-10 w-full gap-2 sm:w-auto"
             >
               <ArrowLeft className="w-4 h-4 mr-2" /> Kembali
             </Button>
@@ -665,23 +727,19 @@ export default function NewRecommendation() {
             <Button
               onClick={handleNext}
               disabled={
-                !isCurrentStepValid() ||
-                isSubmitting ||
-                !isBacktestDateValid
+                !isCurrentStepValid() || isSubmitting || isPreviewing || !isBacktestDateValid
               }
-              className="w-full sm:w-auto h-12 px-8 text-base bg-blue-600 hover:bg-blue-700"
+              className="h-10 w-full gap-2 px-5 sm:w-auto"
             >
-              {isSubmitting ? (
+              {isSubmitting || isPreviewing ? (
                 <span className="flex items-center gap-2">
-                  <Activity className="w-5 h-5 animate-spin" /> Menjalankan
-                  Algoritma Genetika...
+                  <Activity className="h-4 w-4 animate-spin" />
+                  {isPreviewing ? "Memeriksa kondisi pasar..." : "Menyiapkan rekomendasi..."}
                 </span>
               ) : isConfirmStep ? (
                 <span className="flex items-center gap-2">
-                  {isBacktest
-                    ? "Setuju & Jalankan Simulasi"
-                    : "Setuju & Jalankan Analisis"}{" "}
-                  <ArrowRight className="w-5 h-5" />
+                  {isBacktest ? "Jalankan Simulasi" : "Buat Rekomendasi"}{" "}
+                  <ArrowRight className="h-4 w-4" />
                 </span>
               ) : step === totalSteps - 1 ? (
                 <span className="flex items-center gap-2">
@@ -696,6 +754,17 @@ export default function NewRecommendation() {
           </div>
         </div>
       </div>
+      {bearPreview && (
+        <BearMarketDialog
+          assessments={[bearPreview]}
+          initialPolicy={bearPolicy}
+          capital={parseRupiahInput(answers.capital)}
+          busy={isSubmitting}
+          error={submitError}
+          onClose={() => { setBearPreview(null); setSubmitError(null); }}
+          onConfirm={handleSubmit}
+        />
+      )}
     </div>
   );
 }
