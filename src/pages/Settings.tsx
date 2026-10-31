@@ -8,8 +8,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useOutletContext } from "react-router-dom";
+import type { ProfileOutletContext } from "@/types";
 
 export default function Settings() {
+  const { profile, profileLoading, profileError, retryProfile } =
+    useOutletContext<ProfileOutletContext>();
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
@@ -26,26 +31,32 @@ export default function Settings() {
           <CardHeader>
             <CardTitle>Profil Pengguna</CardTitle>
             <CardDescription>
-              Ubah detail informasi pribadi Anda.
+              Informasi akun yang sedang masuk ke GenFolio.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {profileError && (
+              <div className="flex items-center gap-3 text-sm text-red-700">
+                <span>Profil gagal dimuat.</span>
+                <Button variant="outline" size="sm" onClick={retryProfile}>
+                  Coba lagi
+                </Button>
+              </div>
+            )}
             <div className="grid gap-2 max-w-sm">
               <Label htmlFor="name">Nama Lengkap</Label>
-              <Input id="name" defaultValue="Raoul Stanley" />
+              <Input id="name" value={profile?.name ?? ""} placeholder={profileLoading ? "Memuat..." : "—"} readOnly />
             </div>
             <div className="grid gap-2 max-w-sm">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
-                defaultValue="raoul@example.com"
-                disabled
+                value={profile?.email ?? ""}
+                placeholder={profileLoading ? "Memuat..." : "—"}
+                readOnly
               />
             </div>
-            <Button className="mt-2 bg-blue-600 hover:bg-blue-700">
-              Simpan Perubahan
-            </Button>
           </CardContent>
         </Card>
 

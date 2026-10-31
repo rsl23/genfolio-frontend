@@ -1,5 +1,5 @@
 import apiClient from "./apiClient";
-import type { ApiResponse, TokenResponse } from "@/types";
+import type { ApiResponse, TokenResponse, UserProfile } from "@/types";
 import { clearTokens, setTokens } from "./tokenStorage";
 import axios from "axios";
 
@@ -63,10 +63,10 @@ export const authService = {
     return response.data;
   },
 
-  /** Contoh endpoint terproteksi untuk cek sesi aktif */
-  me: async (): Promise<ApiResponse<{ detail: string }>> => {
+  /** Ambil profil pengguna sesuai access token yang sedang aktif. */
+  me: async (): Promise<ApiResponse<UserProfile>> => {
     const response =
-      await apiClient.get<ApiResponse<{ detail: string }>>("/api/v1/auth/me");
+      await apiClient.get<ApiResponse<UserProfile>>("/api/v1/auth/me");
     return response.data;
   },
 

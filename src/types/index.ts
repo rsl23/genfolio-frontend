@@ -7,9 +7,35 @@ export type RiskProfile = "Konservatif" | "Moderat" | "Agresif" | null;
  */
 export type PortfolioMode = "live" | "backtest";
 
+export type BearPolicy = "manual" | "always_follow";
+export type BearChoice = "recommended" | "full";
+
+export interface BearMarketAssessment {
+  status: "bear" | "normal" | "unknown";
+  severity: number | null;
+  as_of: string | null;
+  requested_date: string;
+  decision_date: string;
+  execution_date: string | null;
+  scheduled_date?: string;
+  recommended_fraction: number | null;
+  risk_profile: string;
+  reason: string;
+  config_version: string;
+  allocation_config_version: string;
+  allocation_formula: string;
+  fingerprint: string;
+  components: Record<string, number>;
+  effective_weights: Record<string, number>;
+  missing_indicators: string[];
+  formula: string | null;
+}
+
 /** Body request POST /api/v1/portfolios/generate */
 export interface GeneratePortofolioRequest {
   budget: number; // total modal (IDR)
+  name_portofolio?: string;
+  description?: string | null;
   risk_profile: RiskProfile | string;
   /** Jawaban kuesioner (dikirim apa adanya; backend mengabaikannya). */
   answers?: Record<string, { value: string; score?: number }>;
@@ -17,11 +43,18 @@ export interface GeneratePortofolioRequest {
   backtest: boolean;
   /** Tanggal acuan simulasi "YYYY-MM-DD" — WAJIB bila backtest = true. */
   date_ref?: string;
+  rebalance?: boolean;
+  bear_management?: boolean;
+  bear_choice?: BearChoice;
+  bear_preview_as_of?: string | null;
+  bear_preview_fingerprint?: string;
 }
 
 /** Body POST /api/v1/portfolios/generate-rebalance-series. */
 export interface RebalanceSeriesGenerateRequest {
   budget: number;
+  name_portofolio?: string;
+  description?: string | null;
   risk_profile: RiskProfile | string;
   /** Tanggal pembentukan portofolio awal, format YYYY-MM-DD. */
   start_date: string;
@@ -29,6 +62,12 @@ export interface RebalanceSeriesGenerateRequest {
   end_date: string;
   /** Rebalance dilakukan setiap X bulan; backend menerima 1 sampai 12. */
   interval_months: number;
+  contribution_amount?: number;
+  contribution_interval_months?: number;
+  bear_management?: boolean;
+  bear_choices?: Record<string, BearChoice>;
+  bear_preview_dates?: Record<string, string>;
+  bear_preview_fingerprints?: Record<string, string>;
 }
 
 export interface FormData extends Record<string, string> {
@@ -37,6 +76,10 @@ export interface FormData extends Record<string, string> {
 
 export interface PortfolioData {
   id: string;
+  parent_portofolio_id?: string | null;
+  execution_date?: string | null;
+  name_portofolio?: string | null;
+  description?: string | null;
   user_id: string;
   fitness_score: number;
   sharpe_ratio: number;
@@ -55,6 +98,8 @@ export interface PortfolioData {
   created_at: string;
   date_ref: string;
   budget: number;
+  pending_deposit?: number;
+  capital_contribution?: number;
   allocations: Array<PortofolioItem>;
   narasi_llm: string;
   /**
@@ -90,6 +135,7 @@ export interface RebalanceSeriesResult {
   scheduled_dates: string[];
   portfolios: PortfolioData[];
   skipped: SkippedRebalanceStep[];
+  evaluation_mode?: "automatic_strategy" | "what_if" | "legacy";
 }
 
 export interface PortofolioItem {
@@ -129,10 +175,30 @@ export interface TokenResponse {
   expires_in: number;
 }
 
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface ProfileOutletContext {
+  profile: UserProfile | null;
+  profileLoading: boolean;
+  profileError: boolean;
+  retryProfile: () => void;
+}
+
 export interface ApiResponse<T> {
   status: "success" | "error";
   message: string;
   data: T;
+}
+
+export interface DeletePortfolioResult {
+  deleted_portfolio_ids: string[];
+  deleted_portfolios: number;
+  deleted_items: number;
+  active_portfolio_id: string | null;
 }
 
 /** Satu baris harga historis untuk saham individual */
@@ -188,6 +254,8 @@ export interface PerformancePoint {
   daily_return: number | null;
   /** Return kumulatif dari modal awal sebagai desimal. */
   portfolio_return: number | null;
+  capital_contribution?: number;
+  total_contributions?: number;
   /** Akumulasi P/L terealisasi dari penjualan/rebalance. */
   realized_pnl_cumulative: number | null;
   /** P/L belum terealisasi pada saham yang masih dipegang. */
@@ -233,6 +301,8 @@ export interface PortfolioPerformance {
   holdings: Record<string, number>; // { "BBCA": 2, "BBRI": 5 } — jumlah lot per emiten
   missing_price_tickers: string[];
   initial_capital: number | null;
+  total_contributions?: number;
+  net_investment_gain?: number | null;
   final_nav: number | null;
   /** Persentase return total, sudah dikali 100. */
   total_return_pct: number | null;

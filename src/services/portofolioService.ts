@@ -10,12 +10,43 @@ import type {
   RebalanceSeriesResult,
   UpdateHargaBeliRequest,
   HargaBeliUpdateResult,
+  BearMarketAssessment,
+  BearPolicy,
+  DeletePortfolioResult,
 } from "@/types";
 
 /**
  * Service khusus untuk endpoint-endpoint yang berhubungan dengan "Market"
  */
 export const portofolioService = {
+  getBearPolicy: async (): Promise<BearPolicy> => {
+    const response = await apiClient.get<ApiResponse<{ policy: BearPolicy }>>(
+      "/api/v1/portfolios/bear-policy",
+    );
+    if (!response.data.data) throw new Error("Preferensi alokasi modal tidak tersedia.");
+    return response.data.data.policy;
+  },
+  setBearPolicy: async (policy: BearPolicy): Promise<void> => {
+    await apiClient.patch("/api/v1/portfolios/bear-policy", { policy });
+  },
+  previewBearMarket: async (params: {
+    risk_profile: string; backtest: boolean; date_ref?: string;
+  }): Promise<BearMarketAssessment> => {
+    const response = await apiClient.get<ApiResponse<BearMarketAssessment>>(
+      "/api/v1/portfolios/bear-market-preview", { params },
+    );
+    if (!response.data.data) throw new Error("Pratinjau kondisi pasar tidak tersedia.");
+    return response.data.data;
+  },
+  previewBearSeries: async (
+    body: RebalanceSeriesGenerateRequest,
+  ): Promise<BearMarketAssessment[]> => {
+    const response = await apiClient.post<ApiResponse<{
+      scheduled_dates: string[]; assessments: BearMarketAssessment[];
+    }>>("/api/v1/portfolios/bear-market-series-preview", body, { timeout: 0 });
+    if (!response.data.data) throw new Error("Pratinjau rebalance tidak tersedia.");
+    return response.data.data.assessments;
+  },
   /**
    * Menjalankan GA untuk membuat portofolio baru.
    * POST /api/v1/portfolios/generate
@@ -32,6 +63,7 @@ export const portofolioService = {
       const response = await apiClient.post<ApiResponse<PortfolioData>>(
         "/api/v1/portfolios/generate",
         body,
+        body.rebalance ? { timeout: 0 } : undefined,
       );
       console.log("Response from /api/v1/portfolios/generate:", response.data);
       return response.data;
@@ -51,9 +83,18 @@ export const portofolioService = {
     const response = await apiClient.post<ApiResponse<RebalanceSeriesResult>>(
       "/api/v1/portfolios/generate-rebalance-series",
       body,
-      // Satu series menjalankan GA berkali-kali; timeout default 15 detik
-      // tidak realistis untuk rentang simulasi yang panjang.
-      { timeout: 10 * 60_000 },
+      // Satu series menjalankan GA penuh berkali-kali dan dapat berlangsung
+      // lebih dari 15 menit. Axios memakai 0 untuk menonaktifkan timeout
+      // client; kegagalan backend/jaringan tetap diteruskan sebagai error.
+      { timeout: 0 },
+    );
+    return response.data;
+  },
+  /** Catat setoran pada portofolio live aktif; baru masuk kas saat rebalance. */
+  addLiveCapital: async (amount: number): Promise<ApiResponse<PortfolioData>> => {
+    const response = await apiClient.post<ApiResponse<PortfolioData>>(
+      "/api/v1/portfolios/my-portfolio/add-capital",
+      { amount },
     );
     return response.data;
   },
@@ -109,6 +150,14 @@ export const portofolioService = {
     } catch (error) {
       throw error;
     }
+  },
+  deletePortfolio: async (
+    portfolioId: string,
+  ): Promise<ApiResponse<DeletePortfolioResult>> => {
+    const response = await apiClient.delete<ApiResponse<DeletePortfolioResult>>(
+      `/api/v1/portfolios/my-portfolio/${encodeURIComponent(portfolioId)}`,
+    );
+    return response.data;
   },
   priceHistory: async (): Promise<ApiResponse<MarketData>> => {
     try {
