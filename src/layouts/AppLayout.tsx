@@ -10,11 +10,40 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ProfileOutletContext, UserProfile } from "@/types";
 
 export default function AppLayout() {
   const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState(false);
+  const [profileRequest, setProfileRequest] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    authService.me().then((response) => {
+      if (active) setProfile(response.data);
+    }).catch(() => {
+      if (active) setProfileError(true);
+    }).finally(() => {
+      if (active) setProfileLoading(false);
+    });
+    return () => { active = false; };
+  }, [profileRequest]);
+
+  const retryProfile = () => {
+    setProfileLoading(true);
+    setProfileError(false);
+    setProfileRequest((request) => request + 1);
+  };
+  const profileName = profile?.name?.trim() || (profileLoading ? "Memuat profil..." : "Profil tidak tersedia");
+  const initials = profile?.name?.trim().split(/\s+/).slice(0, 2)
+    .map((part) => part.charAt(0)).join("").toUpperCase() || "?";
+  const profileContext: ProfileOutletContext = {
+    profile, profileLoading, profileError, retryProfile,
+  };
 
   const navItems = [
     { name: "Portofolio Saya", path: "/portfolio", icon: LayoutDashboard },
@@ -81,11 +110,11 @@ export default function AppLayout() {
         <div className="p-4 border-t border-border bg-muted/40">
           <div className="flex items-center gap-3 px-4 py-3 mb-2">
             <div className="w-8 h-8 rounded-full bg-blue-600 text-primary-foreground flex items-center justify-center font-bold text-sm shrink-0">
-              RK
+              {initials}
             </div>
             <div className="flex-1 overflow-hidden">
               <p className="text-sm font-medium text-slate-900 truncate">
-                Raoul Stanley
+                {profileName}
               </p>
               <p className="text-xs text-muted-foreground truncate">Investor</p>
             </div>
@@ -128,7 +157,7 @@ export default function AppLayout() {
         {/* Page Content Wrapper (Inherited by all sub-pages) */}
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50">
           <div className="w-full max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
-            <Outlet />
+            <Outlet context={profileContext} />
           </div>
         </main>
       </div>

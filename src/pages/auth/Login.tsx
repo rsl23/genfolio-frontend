@@ -103,12 +103,12 @@ export default function Login() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="password">Kata Sandi</Label>
-                  <a
+                  {/* <a
                     href="#"
                     className="text-sm font-medium text-blue-600 hover:underline"
                   >
                     Lupa kata sandi?
-                  </a>
+                  </a> */}
                 </div>
                 <Input
                   id="password"
