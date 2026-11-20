@@ -9,7 +9,7 @@ import PortfolioModeToggle from "@/components/PortfolioModeToggle";
 import { getBacktestDateRef, getPortfolioMode, setBacktestDateRef, setCachedPortfolio, setPortfolioMode } from "@/lib/portfolioMode";
 import { groupPortfolioSeries, type PortfolioSeries } from "@/lib/portfolioSeries";
 import { selectPerformanceWindow } from "@/lib/portfolioPerformanceWindow";
-import { filterPortfolioSeries, portfolioTickers, sortPortfolioSeries, type PortfolioListSort } from "@/lib/portfolioListFilters";
+import { filterPortfolioSeries, isPortfolioSeriesActive, portfolioTickers, sortPortfolioSeries, type PortfolioListSort } from "@/lib/portfolioListFilters";
 import { portofolioService } from "@/services/portofolioService";
 import type { PortfolioData, PortfolioMode, PortfolioPerformance } from "@/types";
 
@@ -66,6 +66,7 @@ export default function ListPortofolio() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingActivityId, setUpdatingActivityId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [visibleCount, setVisibleCount] = useState(6);
   const [previews, setPreviews] = useState<Record<string, PerformancePreview>>({});
@@ -170,7 +171,7 @@ export default function ListPortofolio() {
     const portfolio = item.root;
     setPortfolioMode(mode);
     if (mode === "backtest") setBacktestDateRef(portfolio.date_ref?.slice(0, 10) ?? null);
-    navigate("/portfolio", {
+    navigate(`/portfolio/${encodeURIComponent(portfolio.id)}`, {
       state: {
         mode,
         dateRef: portfolio.date_ref?.slice(0, 10) ?? null,
@@ -215,16 +216,39 @@ export default function ListPortofolio() {
     }
   };
 
+  const togglePortfolioActivity = async (item: PortfolioSeries) => {
+    if (updatingActivityId || deletingId) return;
+    setUpdatingActivityId(item.root.id);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await portofolioService.setPortfolioActivity(
+        item.root.id, !isPortfolioSeriesActive(item, mode),
+      );
+      if (response.status !== "success" || !response.data) throw new Error("Respons status tidak valid.");
+      const updated = response.data;
+      setPortfolios((current) => current.map((snapshot) => snapshot.id === updated.portfolio_id
+        ? { ...snapshot, is_list_active: updated.is_list_active } : snapshot));
+      setSuccess(updated.is_list_active ? "Portofolio ditandai aktif." : "Portofolio ditandai nonaktif.");
+    } catch (err) {
+      const data = axios.isAxiosError(err) ? err.response?.data : null;
+      setError(typeof data?.detail === "string" ? data.detail :
+        typeof data?.message === "string" ? data.message : "Gagal mengubah status portofolio. Coba lagi.");
+    } finally {
+      setUpdatingActivityId(null);
+    }
+  };
+
   const isBacktest = mode === "backtest";
-  const activeCount = series.filter((item) => item.latest.status_portofolio === (isBacktest ? "active_backtest" : "active")).length;
+  const activeCount = series.filter((item) => isPortfolioSeriesActive(item, mode)).length;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 pb-10 animate-in fade-in duration-500">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Portofolio</p>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Riwayat Portofolio</h1>
-          <p className="mt-1 text-sm text-slate-500">Kenali portofolio Anda dari identitas, komposisi, dan performanya.</p>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Portofolio Saya</h1>
+          <p className="mt-1 text-sm text-slate-500">Pilih portofolio untuk melihat detail, performa, dan riwayat rebalancenya.</p>
         </div>
         <Link to="/generate" state={{ mode }}>
           <Button className="h-10 w-full gap-2 sm:w-auto"><Plus className="h-4 w-4" /> Rekomendasi Baru</Button>
@@ -241,6 +265,7 @@ export default function ListPortofolio() {
           <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> Muat ulang
         </Button>
       </div>
+
 
       <div className="grid gap-3 rounded-2xl border border-slate-200 bg-card p-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_11rem_13rem]">
         <div className="min-w-0">
@@ -274,7 +299,7 @@ export default function ListPortofolio() {
             <option value="return-asc">Return awal terendah</option>
           </select>
         </div>
-        <p className="text-xs text-slate-500 sm:col-span-2 lg:col-span-3">Tanggal memakai tanggal portofolio awal; filter saham mencakup saham yang pernah ada saat rebalance.</p>
+        <p className="text-xs text-slate-500 sm:col-span-2 lg:col-span-3">Portofolio aktif selalu tampil lebih dulu. Tanggal memakai portofolio awal; filter saham mencakup riwayat rebalance.</p>
         {!isLoading && !error && series.length > 0 &&
           <p role="status" className="text-xs font-medium text-slate-600 sm:col-span-2 lg:col-span-3">{filteredSeries.length} dari {series.length} portofolio cocok</p>}
         {!isLoading && !error && isPerformanceSort && !isPerformanceSortLoading &&
@@ -317,7 +342,7 @@ export default function ListPortofolio() {
           <div className="grid gap-4 md:grid-cols-2">
             {sortedSeries.slice(0, visibleCount).map((item) => {
               const portfolio = item.root;
-              const active = item.latest.status_portofolio === (isBacktest ? "active_backtest" : "active");
+              const active = isPortfolioSeriesActive(item, mode);
               const preview = previews[item.latest.id];
               const performance = preview?.status === "ready"
                 ? selectPerformanceWindow(preview.data, item.snapshots, portfolio.id).data
@@ -326,18 +351,25 @@ export default function ListPortofolio() {
               const tickerMatchIndex = highlightedTicker
                 ? item.snapshots.findIndex((snapshot) => snapshot.allocations?.some((allocation) => allocation.ticker.toUpperCase() === highlightedTicker))
                 : -1;
-              const name = portfolio.name_portofolio?.trim() || `Portofolio ${portfolio.risk_profile} · ${formatDate(isBacktest ? (portfolio.execution_date || portfolio.date_ref) : portfolio.created_at)}`;
+              const name = portfolio.name_portofolio?.trim() || `Portofolio ${portfolio.risk_profile} · ${formatDate(portfolio.execution_date || portfolio.date_ref || portfolio.created_at)}`;
 
               return (
                 <article key={portfolio.id} className="flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-card p-5 shadow-sm transition hover:border-primary/30 hover:shadow-md">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs text-slate-500">{isBacktest ? "Simulasi" : "Live"} sejak {formatDate(isBacktest ? (portfolio.execution_date || portfolio.date_ref) : portfolio.created_at)} · {item.snapshots.length - 1} rebalance</p>
+                      <p className="text-xs text-slate-500">{isBacktest ? "Simulasi" : "Live"} sejak {formatDate(portfolio.execution_date || portfolio.date_ref || portfolio.created_at)} · {item.snapshots.length - 1} rebalance</p>
                       <h2 className="mt-1 truncate text-lg font-semibold text-slate-900" title={name}>{name}</h2>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${active ? "bg-primary/10 text-primary" : "bg-slate-100 text-slate-600"}`}>
-                      {active ? "Aktif" : "Riwayat"}
-                    </span>
+                    <button type="button" role="switch" aria-checked={active}
+                      aria-label={`Status aktif ${name}`}
+                      disabled={updatingActivityId !== null || deletingId !== null}
+                      onClick={() => void togglePortfolioActivity(item)}
+                      className={`flex shrink-0 items-center gap-2 rounded-full px-2.5 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-wait disabled:opacity-60 ${active ? "bg-primary/10 text-primary" : "bg-slate-100 text-slate-600"}`}>
+                      <span aria-hidden="true" className={`relative h-4 w-7 rounded-full transition ${active ? "bg-primary" : "bg-slate-300"}`}>
+                        <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${active ? "translate-x-3.5" : "translate-x-0.5"}`} />
+                      </span>
+                      {updatingActivityId === portfolio.id ? "Menyimpan..." : active ? "Aktif" : "Nonaktif"}
+                    </button>
                   </div>
                   <p className="mt-2 line-clamp-2 min-h-10 text-sm text-slate-500">{portfolio.description?.trim() || "Belum ada deskripsi untuk portofolio ini."}</p>
 
@@ -388,7 +420,7 @@ export default function ListPortofolio() {
                     <span className="text-xs text-slate-400">{performance ? `Hingga ${formatDate(performance.end_date)}` : ""}</span>
                     <div className="flex shrink-0 gap-2">
                       <Button type="button" variant="outline" size="sm" className="gap-1.5 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-                        aria-label={`Hapus portofolio ${name}`} disabled={deletingId !== null} onClick={() => void deletePortfolio(item)}>
+                        aria-label={`Hapus portofolio ${name}`} disabled={deletingId !== null || updatingActivityId !== null} onClick={() => void deletePortfolio(item)}>
                         <Trash2 className="h-4 w-4" /> {deletingId === portfolio.id ? "Menghapus..." : "Hapus"}
                       </Button>
                       <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={deletingId !== null} onClick={() => openPortfolio(item)}>

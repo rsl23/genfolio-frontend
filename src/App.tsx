@@ -18,11 +18,12 @@ export default function App() {
         {/* Route terproteksi: wajib punya access token */}
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
-            <Route path="/" element={<Navigate to="/portfolio" replace />} />
-            <Route path="/portfolio" element={<MyPortfolio />} />
+            <Route path="/" element={<Navigate to="/portfolios" replace />} />
+            <Route path="/portfolio" element={<Navigate to="/portfolios" replace />} />
+            <Route path="/portfolio/:portfolioId" element={<MyPortfolio />} />
             <Route
               path="/portofolio"
-              element={<Navigate to="/portfolio" replace />}
+              element={<Navigate to="/portfolios" replace />}
             />
             <Route path="/portfolios" element={<ListPortofolio />} />
             <Route path="/generate" element={<NewRecommendation />} />
@@ -31,7 +32,7 @@ export default function App() {
         </Route>
 
         {/* Catch-all: URL tak dikenal diarahkan ke "/".
-            Jika sudah login -> "/" redirect ke /portfolio,
+            Jika sudah login -> "/" redirect ke /portfolios,
             jika belum login -> ProtectedRoute redirect ke /login. */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

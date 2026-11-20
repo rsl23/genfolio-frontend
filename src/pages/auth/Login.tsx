@@ -30,8 +30,8 @@ export default function Login() {
     try {
       await authService.login(email, password);
 
-      // ===== SUKSES: baru pindah ke /portfolio =====
-      navigate("/portfolio");
+      // Setelah login, pengguna memilih portofolio dari daftar.
+      navigate("/portfolios");
     } catch (err) {
       // Error dari backend (HTTPException / validasi FastAPI) masuk ke sini
       if (axios.isAxiosError(err)) {

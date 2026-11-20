@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useOutletContext } from "react-router-dom";
+import PortfolioNoticeDialog from "@/components/PortfolioNoticeDialog";
+import {
+  acknowledgePortfolioNotice,
+  hasAcknowledgedPortfolioNotice,
+} from "@/lib/portfolioNotice";
+import { authService } from "@/services/authService";
+import type { ProfileOutletContext } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RupiahInput } from "@/components/ui/rupiah-input";
@@ -8,9 +15,15 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import PortfolioModeToggle from "@/components/PortfolioModeToggle";
 import BearMarketDialog from "@/components/BearMarketDialog";
+import PortfolioProgressDialog from "@/components/PortfolioProgressDialog";
+import MarketPreviewStatus from "@/components/MarketPreviewStatus";
+import { usePortfolioProgress } from "@/hooks/usePortfolioProgress";
+import { isBearPreviewChanged, BEAR_PREVIEW_UPDATED } from "@/lib/bearPreview";
+import { executionOptions } from "@/lib/portfolioExecutionPolicy";
 import { ArrowRight, Activity, AlertCircle, ArrowLeft } from "lucide-react";
 import type {
   GeneratePortofolioRequest,
+  FitnessPolicy,
   PortfolioMode,
   RiskProfile,
   BearChoice,
@@ -175,7 +188,10 @@ function determineRiskProfile(
 }
 
 export default function NewRecommendation() {
+  const analysis = usePortfolioProgress();
   const navigate = useNavigate();
+  const { profile } = useOutletContext<ProfileOutletContext>();
+  const [noticeUserId, setNoticeUserId] = useState<string | null>(null);
   const location = useLocation();
   // Mode bisa sudah dipilih dari halaman Portofolio Saya (navigasi + state)
   const navigationState = location.state as { mode?: PortfolioMode } | null;
@@ -187,7 +203,9 @@ export default function NewRecommendation() {
   const [portfolioDescription, setPortfolioDescription] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
-  const [bearPreview, setBearPreview] = useState<BearMarketAssessment | null>(null);
+  const [bearPreview, setBearPreview] = useState<BearMarketAssessment | null>(
+    null,
+  );
   const [bearPolicy, setBearPolicy] = useState<BearPolicy>("manual");
   // Profil risiko pilihan user jika override hasil kuis (null = pakai hasil kuis)
   const [overrideProfile, setOverrideProfile] = useState<RiskProfile>(null);
@@ -202,6 +220,9 @@ export default function NewRecommendation() {
     ),
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fitnessPolicy] =
+    useState<FitnessPolicy>("legacy_cvar_v1");
+  const [profilePolicy, setProfilePolicy] = useState<"legacy" | "composition_v2">("legacy");
   const isBacktest = mode === "backtest";
   // date_ref wajib dan harus berada dalam rentang tanggal yang boleh dipilih
   // user (BACKTEST_PICKER_MIN..BACKTEST_PICKER_MAX) supaya GA tidak gagal
@@ -261,11 +282,26 @@ export default function NewRecommendation() {
     if (step < totalSteps) {
       setStep(step + 1); // masuk/berpindah ke layar konfirmasi
     } else {
-      await openBearDialog();
+      analysis.start(true);
+      setIsPreviewing(true);
+      setSubmitError(null);
+      try {
+        const userId = profile?.id ?? (await authService.me()).data.id;
+        if (!hasAcknowledgedPortfolioNotice(userId)) {
+          setNoticeUserId(userId);
+          return;
+        }
+        await openBearDialog();
+      } catch (error) {
+        setSubmitError(describeApiError(error));
+      } finally {
+        setIsPreviewing(false);
+      }
     }
   };
 
   const openBearDialog = async () => {
+    analysis.start(true);
     setIsPreviewing(true);
     setSubmitError(null);
     try {
@@ -287,9 +323,11 @@ export default function NewRecommendation() {
   };
 
   const handleSubmit = async (
-    policy: BearPolicy, choices: Record<string, BearChoice>,
+    policy: BearPolicy,
+    choices: Record<string, BearChoice>,
   ) => {
     if (!bearPreview) return;
+    const signal = analysis.start();
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -322,9 +360,11 @@ export default function NewRecommendation() {
         name_portofolio: portfolioName.trim(),
         description: portfolioDescription.trim() || null,
         risk_profile: finalProfile,
+        profile_policy: profilePolicy,
         answers: finalPayload,
         backtest: isBacktest,
         bear_management: true,
+        ...executionOptions(fitnessPolicy),
         bear_choice: choices[bearPreview.requested_date],
         bear_preview_as_of: bearPreview.as_of,
         bear_preview_fingerprint: bearPreview.fingerprint,
@@ -333,39 +373,60 @@ export default function NewRecommendation() {
       console.log(`Payload ke GA (mode ${mode}):`, apiPayload);
 
       const response =
-        await portofolioService.stockPortofolioGenerate(apiPayload);
+        await portofolioService.stockPortofolioGenerate(apiPayload, analysis.onProgress, signal);
 
       console.log(response);
 
-      // Simpan preferensi mode + cache hasil generate. Cache dipakai halaman
-      // /portfolio untuk menampilkan portofolio yang baru dibuat (khusus
-      // backtest, karena GET /my-portofolio mengembalikan portofolio live).
+      // Simpan preferensi mode + cache hasil generate.
       setPortfolioMode(mode);
       setBacktestDateRef(isBacktest ? backtestDate : null);
       if (response.status === "success" && response.data) {
         setCachedPortfolio(mode, response.data);
       }
 
-      // Halaman /portfolio otomatis mengambil portofolio terbaru
-      // via GET /api/v1/portfolios/my-portofolio saat dirender (mode live),
-      // dan memakai state/cache di atas saat mode backtest.
-      // date_ref resmi = field backend; fallback tanggal yang dipilih user.
-      const backendDateRef =
-        response.status === "success" && response.data?.date_ref
-          ? response.data.date_ref.slice(0, 10)
-          : null;
-      navigate("/portfolio", {
+      if (response.status !== "success" || !response.data) {
+        throw new Error(
+          response.message || "Portofolio baru belum dapat ditampilkan.",
+        );
+      }
+      // Buka ID hasil generate agar detail selalu mengacu pada portofolio ini.
+      const backendDateRef = response.data.date_ref
+        ? response.data.date_ref.slice(0, 10)
+        : null;
+      navigate(`/portfolio/${encodeURIComponent(response.data.id)}`, {
         state: {
           formData: { capital: String(parseRupiahInput(answers.capital)) },
           riskProfile: finalProfile,
           mode,
           dateRef: backendDateRef ?? (isBacktest ? backtestDate : null),
-          portfolio: response.status === "success" ? response.data : null,
+          portfolio: response.data,
+          selectedPortfolioId: response.data.id,
         },
       });
     } catch (error) {
+      if (signal.aborted) {
+        setBearPreview(null);
+        setSubmitError("Analisis dihentikan. Periksa riwayat portofolio sebelum menjalankan kembali.");
+        return;
+      }
       console.error("Error filtering stocks:", error);
-      setSubmitError(describeApiError(error));
+      if (isBearPreviewChanged(error)) {
+        try {
+          const updated = await portofolioService.previewBearMarket({
+            risk_profile: finalProfile ?? "Moderat",
+            backtest: isBacktest,
+            ...(isBacktest ? { date_ref: backtestDate } : {}),
+          });
+          setBearPolicy(policy);
+          setBearPreview(updated);
+          setSubmitError(BEAR_PREVIEW_UPDATED);
+        } catch (refreshError) {
+          setBearPreview(null);
+          setSubmitError(describeApiError(refreshError));
+        }
+      } else {
+        setSubmitError(describeApiError(error));
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -403,6 +464,8 @@ export default function NewRecommendation() {
             kebutuhan Anda.
           </p>
         </header>
+
+        {isPreviewing && <MarketPreviewStatus />}
 
         <div
           aria-label={`Langkah ${step + 1} dari ${totalSteps + 1}`}
@@ -480,6 +543,26 @@ export default function NewRecommendation() {
                       {portfolioDescription.length}/500
                     </p>
                   </div>
+                </div>
+
+                {/* <FitnessPolicySelect value={fitnessPolicy}
+                  onChange={setFitnessPolicy} disabled={isSubmitting || isPreviewing || bearPreview !== null} /> */}
+
+                <div className="space-y-2">
+                  <Label htmlFor="profile-policy">Metode profil risiko</Label>
+                  <select
+                    id="profile-policy"
+                    value={profilePolicy}
+                    onChange={(event) => setProfilePolicy(event.target.value as "legacy" | "composition_v2")}
+                    disabled={isSubmitting || isPreviewing}
+                    className="h-10 w-full rounded-lg border border-input bg-card px-3 text-sm"
+                  >
+                    <option value="legacy">Metode saat ini</option>
+                    <option value="composition_v2">Eksperimen: batas risiko berbeda per profil</option>
+                  </select>
+                  <p className="text-xs text-slate-500">
+                    Pada Composition v2, batas atas volatilitas porsi saham dibandingkan IHSG: Konservatif 110%, Moderat 125%, Agresif 150%. Tidak ada minimum volatilitas. Batas dinilai saat pemilihan; hasil return dan risiko selama investasi dapat berbeda.
+                  </p>
                 </div>
 
                 {/* Badge profil hasil kuis */}
@@ -727,14 +810,19 @@ export default function NewRecommendation() {
             <Button
               onClick={handleNext}
               disabled={
-                !isCurrentStepValid() || isSubmitting || isPreviewing || !isBacktestDateValid
+                !isCurrentStepValid() ||
+                isSubmitting ||
+                isPreviewing ||
+                !isBacktestDateValid
               }
               className="h-10 w-full gap-2 px-5 sm:w-auto"
             >
               {isSubmitting || isPreviewing ? (
                 <span className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 animate-spin" />
-                  {isPreviewing ? "Memeriksa kondisi pasar..." : "Menyiapkan rekomendasi..."}
+                  <Activity className={`h-4 w-4${isPreviewing ? " animate-spin" : ""}`} />
+                  {isPreviewing
+                    ? "Memeriksa kondisi pasar..."
+                    : "Menyiapkan rekomendasi..."}
                 </span>
               ) : isConfirmStep ? (
                 <span className="flex items-center gap-2">
@@ -754,14 +842,32 @@ export default function NewRecommendation() {
           </div>
         </div>
       </div>
+      {noticeUserId && (
+        <PortfolioNoticeDialog
+          onClose={() => setNoticeUserId(null)}
+          onAccept={() => {
+            acknowledgePortfolioNotice(noticeUserId);
+            setNoticeUserId(null);
+            void openBearDialog();
+          }}
+        />
+      )}
+      {isSubmitting && (
+        <PortfolioProgressDialog store={analysis.store} onCancel={analysis.cancel} />
+      )}
       {bearPreview && (
         <BearMarketDialog
+          key={bearPreview.fingerprint}
           assessments={[bearPreview]}
           initialPolicy={bearPolicy}
           capital={parseRupiahInput(answers.capital)}
           busy={isSubmitting}
+          hidden={isSubmitting}
           error={submitError}
-          onClose={() => { setBearPreview(null); setSubmitError(null); }}
+          onClose={() => {
+            setBearPreview(null);
+            setSubmitError(null);
+          }}
           onConfirm={handleSubmit}
         />
       )}

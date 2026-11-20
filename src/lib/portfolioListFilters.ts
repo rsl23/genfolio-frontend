@@ -3,11 +3,16 @@ import type { PortfolioSeries } from "@/lib/portfolioSeries";
 
 export type PortfolioListSort = "date-desc" | "date-asc" | "return-desc" | "return-asc";
 
-export function portfolioStartDate(item: PortfolioSeries, mode: PortfolioMode): string {
+export function isPortfolioSeriesActive(item: PortfolioSeries, mode: PortfolioMode): boolean {
+  return item.root.is_list_active ??
+    item.latest.status_portofolio === (mode === "backtest" ? "active_backtest" : "active");
+}
+
+export function portfolioStartDate(item: PortfolioSeries, _mode: PortfolioMode): string {
+  // Keep the existing caller signature; both modes now use position inception.
+  void _mode;
   const root = item.root;
-  return (mode === "backtest"
-    ? root.execution_date || root.date_ref || root.created_at
-    : root.created_at).slice(0, 10);
+  return (root.execution_date || root.date_ref || root.created_at).slice(0, 10);
 }
 
 export function portfolioTickers(item: PortfolioSeries): string[] {
@@ -46,6 +51,8 @@ export function sortPortfolioSeries(
   returns: Record<string, number | null> = {},
 ): PortfolioSeries[] {
   return [...items].sort((left, right) => {
+    const activityOrder = Number(isPortfolioSeriesActive(right, mode)) - Number(isPortfolioSeriesActive(left, mode));
+    if (activityOrder !== 0) return activityOrder;
     if (sort.startsWith("return")) {
       const a = returns[left.root.id];
       const b = returns[right.root.id];

@@ -1,9 +1,12 @@
 import type { PortfolioData, PortfolioPerformance } from "@/types";
+import { calculateReturnMetrics } from "./portfolioReturnMetrics.ts";
 
 export interface PortfolioPerformanceWindow {
   data: PortfolioPerformance;
   isSegment: boolean;
   nextExecutionDate: string | null;
+  /** Match the requested snapshot to the same date window sent for evaluation. */
+  evaluationPortfolioId: string;
 }
 
 const snapshotDay = (snapshot: PortfolioData) =>
@@ -16,11 +19,15 @@ export function selectPerformanceWindow(
   selectedId: string,
   scope: "period" | "overall" = "period",
 ): PortfolioPerformanceWindow {
-  if (scope === "overall") return { data: full, isSegment: false, nextExecutionDate: null };
+  const overallWindow = {
+    data: full, isSegment: false, nextExecutionDate: null,
+    evaluationPortfolioId: snapshots.at(-1)?.id ?? selectedId,
+  };
+  if (scope === "overall") return overallWindow;
   const index = snapshots.findIndex((snapshot) => snapshot.id === selectedId);
-  if (index < 0) return { data: full, isSegment: false, nextExecutionDate: null };
+  if (index < 0) return overallWindow;
   if (index === 0 && snapshots.length === 1) {
-    return { data: full, isSegment: true, nextExecutionDate: null };
+    return { data: full, isSegment: true, nextExecutionDate: null, evaluationPortfolioId: selectedId };
   }
 
   const start = snapshotDay(snapshots[index]);
@@ -46,16 +53,31 @@ export function selectPerformanceWindow(
   const lastNav = last?.portfolio_value ?? null;
   const contributions = (last?.total_contributions ?? 0) - (first?.total_contributions ?? 0);
   const finalReturn = normalizedPoints.at(-1)?.portfolio_return ?? null;
+  const startDate = first?.date.slice(0, 10) ?? start;
+  const endDate = last?.date.slice(0, 10) ?? start;
+  const metrics = calculateReturnMetrics({
+    initialCapital: firstNav,
+    finalNav: lastNav,
+    startDate,
+    endDate,
+    twrReturnPct: finalReturn === null ? null : finalReturn * 100,
+    // Opening NAV already includes any deposit on the first selected day.
+    contributions: windowPoints.slice(1).map((point) => ({
+      date: point.date, amount: point.capital_contribution ?? 0,
+    })),
+  });
 
   return {
     isSegment: true,
     nextExecutionDate,
+    evaluationPortfolioId: selectedId,
     data: {
       ...full,
-      start_date: first?.date.slice(0, 10) ?? start,
+      ...metrics,
+      start_date: startDate,
       requested_start_date: start,
       start_date_adjusted: first ? first.date.slice(0, 10) > start : false,
-      end_date: last?.date.slice(0, 10) ?? start,
+      end_date: endDate,
       initial_capital: firstNav,
       total_contributions: contributions,
       final_nav: lastNav,

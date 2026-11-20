@@ -1,4 +1,6 @@
 import apiClient from "./apiClient";
+import { isAxiosError } from "axios";
+import { readPortfolioResponse, type PortfolioProgress } from "@/lib/portfolioProgress";
 import type {
   PortfolioData,
   ApiResponse,
@@ -14,6 +16,28 @@ import type {
   BearPolicy,
   DeletePortfolioResult,
 } from "@/types";
+
+async function streamPortfolio<T>(path: string, body: unknown, onProgress: (progress: PortfolioProgress) => void, signal?: AbortSignal): Promise<ApiResponse<T>> {
+  try {
+    onProgress({ stage: "preparing", title: "Menjalankan analisis portofolio",
+      detail: "Mengirim pilihan alokasi Anda dan menunggu pembaruan dari server." });
+    const response = await apiClient.post<ReadableStream<Uint8Array>>(path, body,
+      { adapter: "fetch", responseType: "stream", timeout: 0, signal,
+        headers: { Accept: "text/event-stream, application/json" } });
+    return await readPortfolioResponse<ApiResponse<T>>(
+      response.data, String(response.headers["content-type"] ?? ""), onProgress, signal);
+  } catch (error) {
+    // Authentication and validation can fail before SSE starts. Decode their
+    // JSON body so existing page error messages keep the server's explanation.
+    if (isAxiosError(error) && error.response?.data instanceof ReadableStream) {
+      try { error.response.data = await new Response(error.response.data).json(); } catch { /* Keep the original error. */ }
+    }
+    if ((isAxiosError(error) && error.code === "ERR_NETWORK") || error instanceof TypeError) {
+      throw new Error("Koneksi ke server terputus. Server mungkin dihentikan atau dimulai ulang. Periksa riwayat portofolio sebelum menjalankan analisis kembali.");
+    }
+    throw error;
+  }
+}
 
 /**
  * Service khusus untuk endpoint-endpoint yang berhubungan dengan "Market"
@@ -33,7 +57,8 @@ export const portofolioService = {
     risk_profile: string; backtest: boolean; date_ref?: string;
   }): Promise<BearMarketAssessment> => {
     const response = await apiClient.get<ApiResponse<BearMarketAssessment>>(
-      "/api/v1/portfolios/bear-market-preview", { params },
+      // A cold breadth cache downloads all listed equities before returning.
+      "/api/v1/portfolios/bear-market-preview", { params, timeout: 0 },
     );
     if (!response.data.data) throw new Error("Pratinjau kondisi pasar tidak tersedia.");
     return response.data.data;
@@ -58,12 +83,19 @@ export const portofolioService = {
    */
   stockPortofolioGenerate: async (
     body: GeneratePortofolioRequest,
+    onProgress?: (progress: PortfolioProgress) => void,
+    signal?: AbortSignal,
   ): Promise<ApiResponse<PortfolioData>> => {
+    if (onProgress) {
+      return streamPortfolio<PortfolioData>("/api/v1/portfolios/generate", body, onProgress, signal);
+    }
     try {
       const response = await apiClient.post<ApiResponse<PortfolioData>>(
         "/api/v1/portfolios/generate",
         body,
-        body.rebalance ? { timeout: 0 } : undefined,
+        // Unduhan data, GA, dan narasi dapat melebihi 150 detik juga pada
+        // generate pertama. Tunggu hasil backend seperti pada rebalance.
+        { timeout: 0, signal },
       );
       console.log("Response from /api/v1/portfolios/generate:", response.data);
       return response.data;
@@ -73,28 +105,33 @@ export const portofolioService = {
     }
   },
   /**
-   * Membentuk portofolio awal lalu menjalankan rebalance backtest berantai
+   * Melanjutkan snapshot backtest yang tersimpan dengan rebalance berantai
    * setiap X bulan hingga tanggal akhir simulasi.
    * POST /api/v1/portfolios/generate-rebalance-series
    */
   generateRebalanceSeries: async (
     body: RebalanceSeriesGenerateRequest,
+    onProgress?: (progress: PortfolioProgress) => void,
+    signal?: AbortSignal,
   ): Promise<ApiResponse<RebalanceSeriesResult>> => {
+    if (onProgress) {
+      return streamPortfolio<RebalanceSeriesResult>("/api/v1/portfolios/generate-rebalance-series", body, onProgress, signal);
+    }
     const response = await apiClient.post<ApiResponse<RebalanceSeriesResult>>(
       "/api/v1/portfolios/generate-rebalance-series",
       body,
       // Satu series menjalankan GA penuh berkali-kali dan dapat berlangsung
       // lebih dari 15 menit. Axios memakai 0 untuk menonaktifkan timeout
       // client; kegagalan backend/jaringan tetap diteruskan sebagai error.
-      { timeout: 0 },
+      { timeout: 0, signal },
     );
     return response.data;
   },
   /** Catat setoran pada portofolio live aktif; baru masuk kas saat rebalance. */
-  addLiveCapital: async (amount: number): Promise<ApiResponse<PortfolioData>> => {
+  addLiveCapital: async (amount: number, portfolioId: string): Promise<ApiResponse<PortfolioData>> => {
     const response = await apiClient.post<ApiResponse<PortfolioData>>(
       "/api/v1/portfolios/my-portfolio/add-capital",
-      { amount },
+      { amount, portfolio_id: portfolioId },
     );
     return response.data;
   },
@@ -150,6 +187,25 @@ export const portofolioService = {
     } catch (error) {
       throw error;
     }
+  },
+  setPortfolioActivity: async (
+    portfolioId: string, isActive: boolean,
+  ): Promise<ApiResponse<{ portfolio_id: string; is_list_active: boolean }>> => {
+    const response = await apiClient.patch<ApiResponse<{ portfolio_id: string; is_list_active: boolean }>>(
+      `/api/v1/portfolios/my-portfolio/${encodeURIComponent(portfolioId)}/activity`,
+      { is_active: isActive },
+    );
+    return response.data;
+  },
+  updatePortfolioIdentity: async (
+    portfolioId: string,
+    body: { name_portofolio: string; description: string | null },
+  ): Promise<ApiResponse<PortfolioData>> => {
+    const response = await apiClient.patch<ApiResponse<PortfolioData>>(
+      `/api/v1/portfolios/my-portfolio/${encodeURIComponent(portfolioId)}/identity`,
+      body,
+    );
+    return response.data;
   },
   deletePortfolio: async (
     portfolioId: string,
@@ -207,6 +263,16 @@ export const portofolioService = {
    * milik user. Kepemilikan divalidasi dari JWT di backend.
    * PATCH /api/v1/portfolios/my-portfolio/items/{item_id}/harga-beli
    */
+  updateHolding: async (
+    portfolioId: string,
+    ticker: string,
+    body: { jumlah_lot: number; harga_beli: number; expected_lots: number },
+  ): Promise<ApiResponse<PortfolioData>> => {
+    const response = await apiClient.patch<ApiResponse<PortfolioData>>(
+      `/api/v1/portfolios/my-portfolio/${encodeURIComponent(portfolioId)}/holdings/${encodeURIComponent(ticker)}`, body,
+    );
+    return response.data;
+  },
   updateHargaBeli: async (
     itemId: string,
     body: UpdateHargaBeliRequest,

@@ -1,8 +1,7 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useMatch, useNavigate } from "react-router-dom";
 import { authService } from "@/services/authService";
 import {
   Briefcase,
-  LayoutDashboard,
   Sparkles,
   Settings,
   History,
@@ -15,6 +14,7 @@ import type { ProfileOutletContext, UserProfile } from "@/types";
 
 export default function AppLayout() {
   const navigate = useNavigate();
+  const isPortfolioDetail = Boolean(useMatch("/portfolio/:portfolioId"));
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
@@ -46,8 +46,7 @@ export default function AppLayout() {
   };
 
   const navItems = [
-    { name: "Portofolio Saya", path: "/portfolio", icon: LayoutDashboard },
-    { name: "Riwayat Portofolio", path: "/portfolios", icon: History },
+    { name: "Portofolio Saya", path: "/portfolios", icon: History },
     { name: "Rekomendasi Baru", path: "/generate", icon: Sparkles },
     { name: "Pengaturan", path: "/settings", icon: Settings },
   ];
@@ -95,7 +94,7 @@ export default function AppLayout() {
               onClick={() => setIsMobileMenuOpen(false)}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
-                  isActive
+                  isActive || (item.path === "/portfolios" && isPortfolioDetail)
                     ? "bg-blue-50 text-blue-700 border border-blue-100"
                     : "text-slate-600 hover:bg-muted hover:text-slate-900 border border-transparent"
                 }`

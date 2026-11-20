@@ -6,8 +6,20 @@ export type RiskProfile = "Konservatif" | "Moderat" | "Agresif" | null;
  * - "backtest" : simulasi historis (status backend "active_backtest").
  */
 export type PortfolioMode = "live" | "backtest";
+export type FitnessPolicy = "legacy" | "legacy_cvar_v1";
 
-export type BearPolicy = "manual" | "always_follow";
+export interface FitnessExperimentOptions {
+  profile_policy?: "legacy" | "composition_v2";
+  fitness_policy?: FitnessPolicy;
+  charge_transaction_fees?: boolean;
+  fitness_horizon_days?: number;
+  fitness_cvar_tail_fraction?: number;
+  fitness_lambda_cvar?: number;
+  rebalance_buy_fee_rate?: number;
+  rebalance_sell_fee_rate?: number;
+}
+
+export type BearPolicy = "manual" | "always_follow" | "always_full";
 export type BearChoice = "recommended" | "full";
 
 export interface BearMarketAssessment {
@@ -28,11 +40,22 @@ export interface BearMarketAssessment {
   components: Record<string, number>;
   effective_weights: Record<string, number>;
   missing_indicators: string[];
+  breadth_details?: {
+    status: "available" | "unavailable";
+    as_of: string | null;
+    universe_count: number;
+    eligible_count: number;
+    coverage: number;
+    fraction_below_ma: number | null;
+    ma_sessions: number;
+    reason: string | null;
+  } | null;
   formula: string | null;
 }
 
 /** Body request POST /api/v1/portfolios/generate */
-export interface GeneratePortofolioRequest {
+export interface GeneratePortofolioRequest extends FitnessExperimentOptions {
+  rebalance_model?: "legacy" | "guarded_v1";
   budget: number; // total modal (IDR)
   name_portofolio?: string;
   description?: string | null;
@@ -44,6 +67,7 @@ export interface GeneratePortofolioRequest {
   /** Tanggal acuan simulasi "YYYY-MM-DD" — WAJIB bila backtest = true. */
   date_ref?: string;
   rebalance?: boolean;
+  rebalance_portfolio_id?: string;
   bear_management?: boolean;
   bear_choice?: BearChoice;
   bear_preview_as_of?: string | null;
@@ -51,12 +75,14 @@ export interface GeneratePortofolioRequest {
 }
 
 /** Body POST /api/v1/portfolios/generate-rebalance-series. */
-export interface RebalanceSeriesGenerateRequest {
+export interface RebalanceSeriesGenerateRequest extends FitnessExperimentOptions {
+  rebalance_model?: "legacy" | "guarded_v1";
+  base_portfolio_id: string;
   budget: number;
   name_portofolio?: string;
   description?: string | null;
   risk_profile: RiskProfile | string;
-  /** Tanggal pembentukan portofolio awal, format YYYY-MM-DD. */
+  /** Tanggal snapshot tersimpan yang dilanjutkan, format YYYY-MM-DD. */
   start_date: string;
   /** Batas akhir simulasi, format YYYY-MM-DD dan inklusif. */
   end_date: string;
@@ -74,7 +100,47 @@ export interface FormData extends Record<string, string> {
   capital: string;
 }
 
+export interface PortfolioNewsContextData {
+  status: "available" | "unavailable" | "disabled";
+  cutoff: string | null;
+  lookback_days: number;
+  reason: string;
+  coverage: string;
+  retrieval_partial?: boolean;
+  items: Array<{
+    id: string;
+    ticker: string;
+    title: string;
+    source: string;
+    url: string;
+    published_at: string;
+    summary: string;
+    evidence_level: "headline" | "excerpt";
+  }>;
+}
+
 export interface PortfolioData {
+  price_date?: string | null;
+  holdings_edited?: boolean;
+  execution_prices?: Record<string, number> | null;
+  is_list_active?: boolean | null;
+  fitness_policy?: string; // Historical snapshots retain the original policy label.
+  fitness_diagnostics?: {
+    legacy_score?: number;
+    mean_net_return: number;
+    downside_cvar: number;
+    horizon_days: number;
+    scenario_count: number;
+    cvar_penalty: number;
+  } | null;
+  transaction_costs?: number;
+  rebalance_diagnostics?: {
+    model?: string;
+    narrative_source?: "openai" | "groq" | "verified_template" | "ga_template";
+    news_context?: PortfolioNewsContextData;
+    reason?: "hold" | "risk_repair" | "net_utility_gain";
+    execution_transaction_costs?: number;
+  } | null;
   id: string;
   parent_portofolio_id?: string | null;
   execution_date?: string | null;
@@ -108,6 +174,15 @@ export interface PortfolioData {
    * Berisi aksi BUY / SELL / HOLD per kode emiten beserta selisih lotnya.
    */
   rebalance_deltas?: RebalanceDelta[];
+  deferred_signals?: DeferredRebalanceSignal[];
+}
+
+export interface DeferredRebalanceSignal {
+  ticker: string;
+  action: "BUY" | "SELL";
+  held_lots: number;
+  target_lots: number;
+  reason: string;
 }
 
 /** Satu baris perubahan posisi pada rebalance (field `rebalance_deltas`) */
@@ -143,7 +218,7 @@ export interface PortofolioItem {
   ticker: string;
   lots: number;
   price_per_lot: number; // per lot (harga_acuan x 100)
-  harga_beli?: number; // per lembar — harga beli milik user (bisa diedit via PATCH)
+  harga_beli?: number | null; // average beli per lembar; null jika riwayat tidak cukup
   allocation: number;
   weight: number;
 }
@@ -252,7 +327,7 @@ export interface PerformancePoint {
   holdings_market_value: number | null;
   /** Return hari itu sebagai desimal; null pada titik pertama. */
   daily_return: number | null;
-  /** Return kumulatif dari modal awal sebagai desimal. */
+  /** Return kumulatif berbobot waktu; setoran eksternal dikeluarkan dari return harian. */
   portfolio_return: number | null;
   capital_contribution?: number;
   total_contributions?: number;
@@ -261,6 +336,12 @@ export interface PerformancePoint {
   /** P/L belum terealisasi pada saham yang masih dipegang. */
   unrealized_pnl: number | null;
   ihsg_return: number | null; // return kumulatif IHSG, desimal; null jika belum tersinkron
+  portfolio_value_excluding_dividends?: number | null;
+  stale_price_tickers?: string[];
+  ihsg_observed?: boolean;
+  ihsg_previous_observed_date?: string | null;
+  is_market_session?: boolean | null;
+  previous_market_session_date?: string | null;
 }
 
 /** Payload request untuk PATCH .../items/{item_id}/harga-beli */
@@ -289,8 +370,25 @@ export interface PortfolioPerformanceParams {
   backtest?: boolean;
 }
 
-/** Respons data dari GET /api/v1/portfolios/portofolio_performance/{portfolio_id} */
-export interface PortfolioPerformance {
+/** Ringkasan return, seluruh persentase memakai skala 100 (10 = 10%). */
+export interface PortfolioReturnMetrics {
+  performance_days: number;
+  /** Alias eksplisit dari total_return_pct, kumulatif selama periode. */
+  twr_return_pct: number | null;
+  /** NAV akhir dikurangi modal awal dan setoran; Rupiah, bukan kas cair. */
+  cash_return: number | null;
+  cash_return_pct: number | null;
+  /** XIRR dikonversi ke return periode, memperhitungkan tanggal setoran. */
+  money_weighted_return_pct: number | null;
+  /** XIRR per tahun (Actual/365); null untuk periode < 365 hari. */
+  money_weighted_return_annualized_pct: number | null;
+  /** Rata-rata geometrik TWR per tahun; null untuk periode < 365 hari. */
+  annualized_twr_return_pct: number | null;
+  annualization_status: "available" | "insufficient_history" | "unavailable";
+}
+
+/** Fields tambahan opsional agar frontend tetap cocok dengan backend lama. */
+export interface PortfolioPerformance extends Partial<PortfolioReturnMetrics> {
   /** Hari harga pertama yang benar-benar dapat dihitung. */
   start_date: string;
   /** Tanggal snapshot portofolio pertama yang diminta. */
@@ -304,13 +402,13 @@ export interface PortfolioPerformance {
   total_contributions?: number;
   net_investment_gain?: number | null;
   final_nav: number | null;
-  /** Persentase return total, sudah dikali 100. */
+  /** Return kumulatif berbobot waktu dalam persen; bukan keuntungan dibagi seluruh setoran. */
   total_return_pct: number | null;
   realized_pnl: number | null;
   unrealized_pnl: number | null;
-  /** Belum didukung backend; bernilai null, bukan nol. */
+  /** Dividen bruto yang diakui sebagai piutang dalam NAV; null bila data tidak tersedia. */
   dividend_income: number | null;
-  /** Belum didukung backend; bernilai null, bukan nol. */
+  /** Akumulasi biaya tersimpan; null bila pembukuan tidak terverifikasi. */
   transaction_costs: number | null;
   accounting_limitations: string[];
   series: PerformancePoint[];

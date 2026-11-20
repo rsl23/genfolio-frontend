@@ -4,6 +4,16 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/fraunces";
 
+.analysis-dialog[open] { animation: enter-analysis 250ms ease-out; }
+.analysis-dialog { scrollbar-width: thin; scrollbar-color: #a6c3ad transparent; }
+@keyframes enter-analysis {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .analysis-dialog[open] { animation: none; }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================================
