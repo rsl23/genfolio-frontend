@@ -22,9 +22,12 @@ import { Input } from "@/components/ui/input";
 import { RupiahInput } from "@/components/ui/rupiah-input";
 import { formatRupiahInput, parseRupiahInput } from "@/lib/rupiahInput";
 import { groupPortfolioSeries } from "@/lib/portfolioSeries";
+import { groupRebalanceSteps, deferredExecutions } from "@/lib/rebalanceSteps";
 import { selectPerformanceWindow } from "@/lib/portfolioPerformanceWindow";
 import { performanceReturnMetrics } from "@/lib/portfolioReturnMetrics";
 import PortfolioReturnSummary from "@/components/PortfolioReturnSummary";
+import PortfolioFitnessMetrics from "@/components/PortfolioFitnessMetrics";
+import PortfolioExplanation from "@/components/PortfolioExplanation";
 import RiskEvaluationPanel from "@/components/RiskEvaluationPanel";
 import PortfolioNewsContext from "@/components/PortfolioNewsContext";
 import { Label } from "@/components/ui/label";
@@ -34,13 +37,9 @@ import MarketPreviewStatus from "@/components/MarketPreviewStatus";
 import { usePortfolioProgress } from "@/hooks/usePortfolioProgress";
 import { isBearPreviewChanged, BEAR_PREVIEW_UPDATED } from "@/lib/bearPreview";
 import { executionOptions } from "@/lib/portfolioExecutionPolicy";
-import type { FitnessPolicy } from "@/types";
 import {
   Briefcase,
-  TrendingDown,
-  Bot,
   Activity,
-  CheckCircle2,
   AlertCircle,
   Plus,
   Pencil,
@@ -75,7 +74,6 @@ import type {
   RebalanceDelta,
   BearChoice,
   BearMarketAssessment,
-  BearPolicy,
 } from "@/types";
 import { portofolioService } from "@/services/portofolioService";
 import {
@@ -339,14 +337,6 @@ export default function MyPortfolio() {
     defaultBacktestEndDate(),
   );
   const [rebalanceIntervalMonths, setRebalanceIntervalMonths] = useState(3);
-  const [guardedRebalance, setGuardedRebalance] = useState(false);
-  const [fitnessPolicy] =
-    useState<FitnessPolicy>("legacy_cvar_v1");
-  useEffect(() => {
-    setGuardedRebalance(
-      portfolio?.rebalance_diagnostics?.model === "guarded_v1",
-    );
-  }, [portfolio?.id, portfolio?.rebalance_diagnostics?.model]);
   const [contributionAmountInput, setContributionAmountInput] = useState("");
   const [contributionIntervalMonths, setContributionIntervalMonths] =
     useState(1);
@@ -361,7 +351,6 @@ export default function MyPortfolio() {
   const [seriesBearPreview, setSeriesBearPreview] = useState<
     BearMarketAssessment[] | null
   >(null);
-  const [bearPolicy, setBearPolicy] = useState<BearPolicy>("manual");
   const [rebalanceError, setRebalanceError] = useState<string | null>(null);
   const [rebalanceSummary, setRebalanceSummary] = useState<string | null>(null);
   const selectedSeries = useMemo(() => {
@@ -372,6 +361,18 @@ export default function MyPortfolio() {
       ) ?? null
     );
   }, [allSnapshots, mode, portfolio?.id]);
+  const rebalanceSteps = useMemo(
+    () => groupRebalanceSteps(selectedSeries?.snapshots ?? []), [selectedSeries],
+  );
+  const selectedStep = rebalanceSteps.find(step => step.snapshots.some(snapshot => snapshot.id === portfolio?.id));
+  const delayedExecutions = selectedStep ? deferredExecutions(selectedStep) : [];
+  const remainingSignals = selectedStep?.snapshots.at(-1)?.deferred_signals ?? portfolio?.deferred_signals ?? [];
+  // A direct link to a delayed fill opens its originating rebalance entry.
+  useEffect(() => {
+    if (performanceScope === "period" && selectedStep && portfolio?.id !== selectedStep.initial.id) {
+      setPortfolio(selectedStep.initial);
+    }
+  }, [selectedStep, portfolio?.id, performanceScope]);
   const seriesName = (() => {
     if (!selectedSeries) return portfolio?.name_portofolio || "Portofolio Saya";
     const latest = selectedSeries.latest;
@@ -702,14 +703,10 @@ export default function MyPortfolio() {
     setRebalanceError(null);
     setRebalanceSummary(null);
     try {
-      const [policy, preview] = await Promise.all([
-        portofolioService.getBearPolicy(),
-        portofolioService.previewBearMarket({
+      const preview = await portofolioService.previewBearMarket({
           risk_profile: liveManagementPortfolio.risk_profile,
           backtest: false,
-        }),
-      ]);
-      setBearPolicy(policy);
+        });
       setLiveBearPreview(preview);
     } catch (error) {
       setRebalanceError(
@@ -721,24 +718,24 @@ export default function MyPortfolio() {
   };
 
   const confirmLiveRebalance = async (
-    policy: BearPolicy,
     choices: Record<string, BearChoice>,
+    generateLlmNarrative: boolean,
   ) => {
     if (!liveManagementPortfolio || !liveBearPreview) return;
     const signal = analysis.start();
     setIsRunningRebalance(true);
     setRebalanceError(null);
     try {
-      if (policy !== bearPolicy) await portofolioService.setBearPolicy(policy);
       const response = await portofolioService.stockPortofolioGenerate({
         budget: liveManagementPortfolio.budget,
         risk_profile: liveManagementPortfolio.risk_profile,
         backtest: false,
         rebalance: true,
+        generate_llm_narrative: generateLlmNarrative,
         rebalance_portfolio_id: liveManagementPortfolio.id,
         name_portofolio: liveManagementPortfolio.name_portofolio ?? undefined,
         description: liveManagementPortfolio.description ?? null,
-        ...executionOptions(fitnessPolicy, guardedRebalance),
+        ...executionOptions(),
         bear_management: true,
         bear_choice: choices[liveBearPreview.requested_date],
         bear_preview_as_of: liveBearPreview.as_of,
@@ -772,7 +769,6 @@ export default function MyPortfolio() {
             risk_profile: liveManagementPortfolio.risk_profile,
             backtest: false,
           });
-          setBearPolicy(policy);
           setLiveBearPreview(updated);
           setRebalanceError(BEAR_PREVIEW_UPDATED);
         } catch (refreshError) {
@@ -809,9 +805,7 @@ export default function MyPortfolio() {
     setRebalanceError(null);
     setRebalanceSummary(null);
     try {
-      const [policy, preview] = await Promise.all([
-        portofolioService.getBearPolicy(),
-        portofolioService.previewBearSeries({
+      const preview = await portofolioService.previewBearSeries({
           base_portfolio_id: managementPortfolio.id,
           budget: managementPortfolio.budget,
           name_portofolio: managementPortfolio.name_portofolio ?? undefined,
@@ -823,9 +817,7 @@ export default function MyPortfolio() {
           contribution_amount: contributionAmount,
           contribution_interval_months:
             contributionAmount > 0 ? contributionIntervalMonths : undefined,
-        }),
-      ]);
-      setBearPolicy(policy);
+        });
       setSeriesBearPreview(preview);
     } catch (error) {
       setRebalanceError(
@@ -840,19 +832,17 @@ export default function MyPortfolio() {
   };
 
   const confirmRebalanceSeries = async (
-    policy: BearPolicy,
     choices: Record<string, BearChoice>,
-    rebalanceMethod?: "legacy" | "composition_v2",
+    generateLlmNarrative: boolean,
   ) => {
-    if (!managementPortfolio || !seriesBearPreview || !rebalanceDateRangeValid || !rebalanceMethod) return;
+    if (!managementPortfolio || !seriesBearPreview || !rebalanceDateRangeValid) return;
     const signal = analysis.start();
     setIsRunningRebalance(true);
     setRebalanceError(null);
     try {
-      if (policy !== bearPolicy) await portofolioService.setBearPolicy(policy);
       const response = await portofolioService.generateRebalanceSeries({
-        ...executionOptions(fitnessPolicy, rebalanceMethod === "legacy" && guardedRebalance),
-        profile_policy: rebalanceMethod,
+        ...executionOptions(),
+        generate_llm_narrative: generateLlmNarrative,
         base_portfolio_id: managementPortfolio.id,
         budget: managementPortfolio.budget,
         name_portofolio: managementPortfolio.name_portofolio ?? undefined,
@@ -897,7 +887,6 @@ export default function MyPortfolio() {
       setRebalanceSummary(
         `${response.data.scheduled_dates.length - response.data.skipped.length} rebalance berhasil dari ` +
           `${response.data.scheduled_dates.length} tanggal terjadwal` +
-          ` dengan ${rebalanceMethod === "composition_v2" ? "Composition v2" : "Legacy CVaR"}` +
           (response.data.skipped.length
             ? `; ${response.data.skipped.length} tanggal dilewati. ` +
               response.data.skipped.slice(0, 3)
@@ -999,7 +988,6 @@ export default function MyPortfolio() {
         hargaBeli: undefined,
       }));
 
-  const budgetOk = portfolio?.allocated_budget_ok ?? true;
 
   // Map ticker -> daftar harga dari marketData
   const marketPriceMap: Record<string, number[]> = marketData
@@ -1421,7 +1409,7 @@ export default function MyPortfolio() {
               </p>
             </div>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">
-              {selectedSeries.snapshots.length - 1} rebalance
+              {rebalanceSteps.length - 1} rebalance
             </span>
           </div>
           <div
@@ -1448,7 +1436,7 @@ export default function MyPortfolio() {
                 Awal hingga data terakhir
               </span>
             </button>
-            {selectedSeries.snapshots.map((snapshot, index) => (
+            {rebalanceSteps.map(({ initial: snapshot }, index) => (
               <button
                 key={snapshot.id}
                 type="button"
@@ -1639,25 +1627,6 @@ export default function MyPortfolio() {
                   </p>
                 )}
 
-                {/* <FitnessPolicySelect value={fitnessPolicy} onChange={setFitnessPolicy}
-                  disabled={isRunningRebalance || isPreviewingBear || liveBearPreview !== null} /> */}
-                {/* <label className="flex items-start gap-3 text-sm font-medium text-slate-900">
-                  <input
-                    type="checkbox"
-                    className="mt-1 h-4 w-4 accent-primary"
-                    checked={guardedRebalance}
-                    disabled={
-                      isRunningRebalance ||
-                      isPreviewingBear ||
-                      liveBearPreview !== null
-                    }
-                    onChange={(event) =>
-                      setGuardedRebalance(event.target.checked)
-                    }
-                  />
-                  Pertahankan posisi bila pergantian belum cukup bermanfaat
-                  (eksperimen)
-                </label> */}
                 <div className="flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <p className="max-w-lg text-xs leading-relaxed text-slate-500">
                     Rebalance langsung mengikuti hasil GA. Saham yang tidak
@@ -1734,47 +1703,6 @@ export default function MyPortfolio() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5 pt-5">
-                {/* <FitnessPolicySelect
-                  value={fitnessPolicy}
-                  onChange={setFitnessPolicy}
-                  disabled={
-                    isRunningRebalance ||
-                    isPreviewingBear ||
-                    seriesBearPreview !== null
-                  }
-                /> */}
-                <div className="space-y-2">
-                  {/* <label
-                    htmlFor="guarded-rebalance"
-                    className="flex items-start gap-3 text-sm font-medium text-slate-900"
-                  >
-                    <input
-                      id="guarded-rebalance"
-                      type="checkbox"
-                      className="mt-1 h-4 w-4 accent-primary"
-                      checked={guardedRebalance}
-                      disabled={
-                        isRunningRebalance ||
-                        isPreviewingBear ||
-                        seriesBearPreview !== null
-                      }
-                      onChange={(event) =>
-                        setGuardedRebalance(event.target.checked)
-                      }
-                    />
-                    Pertahankan posisi bila pergantian belum cukup bermanfaat
-                    (eksperimen)
-                  </label> */}
-                  {guardedRebalance && (
-                    <p className="text-xs leading-relaxed text-slate-500">
-                      Membandingkan pergantian saham dengan tetap memegang
-                      posisi saat ini. Fitness yang dipilih dipakai sejak
-                      portofolio awal hingga rebalance terakhir. Hasil penjualan
-                      dapat tetap menjadi kas. Hasil eksperimen belum menjamin
-                      return lebih tinggi.
-                    </p>
-                  )}
-                </div>
                 <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5">
                   <div className="flex items-center gap-2">
                     <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
@@ -2322,7 +2250,7 @@ export default function MyPortfolio() {
           </div>
 
           <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-3 [&>div]:min-w-0">
-            <div className="lg:col-span-2 space-y-8">
+            <div className="lg:col-span-3 space-y-8">
               {/* Detailed Holding Table */}
               <Card className="shadow-sm border-slate-200">
                 <CardHeader>
@@ -2528,11 +2456,31 @@ export default function MyPortfolio() {
                       </TableBody>
                     </Table>
                   </div>
+                  {delayedExecutions.length > 0 && (
+                    <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-slate-700">
+                      <p className="font-semibold text-slate-900">Transaksi tertunda dari rebalance ini</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        {performanceScope === "period" ? "Kepemilikan pada tabel mencatat posisi saat rebalance. " : "Kepemilikan pada tabel mencatat posisi terakhir. "}
+                        Transaksi berikut terlaksana setelah saham kembali dapat diperdagangkan dan termasuk dalam rebalance yang sama.
+                      </p>
+                      <ul className="mt-2 space-y-1">
+                        {delayedExecutions.map(fill => (
+                          <li key={fill.key}>
+                            <strong>{fill.ticker}</strong> · {fill.lots.toLocaleString("id-ID")} lot {fill.action}
+                            {fill.date ? ` pada ${fill.date}` : " pada tanggal yang belum tersedia"}
+                            {fill.price !== null && Number.isFinite(fill.price) && fill.price > 0
+                              ? ` dengan harga ${formattedRupiah(fill.price)} per lembar.`
+                              : "; harga eksekusi belum tersedia."}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
               {/* Rincian Rebalance (hanya bila portofolio dibuat dengan rebalance) */}
-              {!!portfolio?.deferred_signals?.length && (
+              {!!remainingSignals.length && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
                   <p className="font-semibold">Sinyal GA belum dieksekusi</p>
                   <p className="mt-1 text-xs text-amber-800">
@@ -2542,7 +2490,7 @@ export default function MyPortfolio() {
                     harga perlu dinilai ulang.
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {portfolio.deferred_signals.map((signal) => (
+                    {remainingSignals.map((signal) => (
                       <span
                         key={signal.ticker}
                         className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs"
@@ -2669,192 +2617,29 @@ export default function MyPortfolio() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 [&>div]:min-w-0 [&>div]:overflow-hidden [&>div>div:last-child]:text-lg [&>div>div:last-child]:leading-snug [&>div>div:last-child]:tabular-nums [&>div>div:last-child]:[overflow-wrap:anywhere] [&>div>div:last-child]:flex-wrap [&_svg]:shrink-0">
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Dana Terpakai
-                          </div>
-                          <div className="text-2xl font-bold text-slate-900">
-                            {portfolio
-                              ? formattedRupiah(portfolio.total_terpakai)
-                              : "—"}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Sisa Budget (Cash)
-                          </div>
-                          <div className="text-2xl font-bold text-blue-700">
-                            {portfolio
-                              ? formattedRupiah(portfolio.sisa_budget)
-                              : "—"}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            {portfolio?.fitness_policy === "legacy_cvar_v1"
-                              ? "Fitness Lama + CVaR"
-                              : "Fitness Score"}
-                          </div>
-                          <div className="text-2xl font-bold text-slate-900">
-                            {portfolio
-                              ? portfolio.fitness_score.toFixed(
-                                  portfolio.fitness_policy &&
-                                    portfolio.fitness_policy !== "legacy"
-                                    ? 6
-                                    : 2,
-                                )
-                              : "—"}
-                          </div>
-                          {portfolio?.fitness_policy === "legacy_cvar_v1" &&
-                            portfolio.fitness_diagnostics && (
-                              <p className="mt-2 text-xs font-normal text-slate-500">
-                                {portfolio.fitness_diagnostics.scenario_count}{" "}
-                                skenario historis ×{" "}
-                                {portfolio.fitness_diagnostics.horizon_days}{" "}
-                                sesi.
-                                {portfolio.fitness_diagnostics.legacy_score !=
-                                null
-                                  ? `Skor lama ${portfolio.fitness_diagnostics.legacy_score.toFixed(4)}; penalti CVaR ${portfolio.fitness_diagnostics.cvar_penalty.toFixed(4)};`
-                                  : `Return bersih ${(portfolio.fitness_diagnostics.mean_net_return * 100).toFixed(2)}%;`}
-                                CVaR{" "}
-                                {(
-                                  portfolio.fitness_diagnostics.downside_cvar *
-                                  100
-                                ).toFixed(4)}
-                                %;
-                                {portfolio.fitness_diagnostics.downside_cvar ===
-                                  0 &&
-                                  " Ekor skenario tidak rugi; ini bukan berarti risiko investasi nol."}
-                              </p>
-                            )}
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Sharpe Ratio
-                          </div>
-                          <div className="text-2xl font-bold text-slate-900">
-                            {portfolio
-                              ? portfolio.sharpe_ratio.toFixed(2)
-                              : "1.05"}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Max Drawdown
-                          </div>
-                          <div className="text-2xl font-bold text-red-600 flex items-center gap-2">
-                            <TrendingDown className="w-5 h-5" />
-                            {portfolio?.max_drawdown != null
-                              ? `${(portfolio.max_drawdown * 100).toFixed(2)}%`
-                              : "—"}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Avg Korelasi
-                          </div>
-                          <div className="text-2xl font-bold text-slate-900">
-                            {portfolio
-                              ? portfolio.avg_correlation.toFixed(2)
-                              : "0.40"}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Skor Fundamental
-                          </div>
-                          <div className="text-2xl font-bold text-emerald-600 flex items-baseline gap-1">
-                            {portfolio
-                              ? portfolio.skor_fundamental.toFixed(2)
-                              : "0.95"}{" "}
-                            <span className="text-xs text-slate-400 font-normal">
-                              / 1.0
-                            </span>
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Penalti Modal
-                          </div>
-                          <div
-                            className={`text-2xl font-bold flex items-center gap-2 ${
-                              budgetOk ? "text-slate-900" : "text-red-600"
-                            }`}
-                          >
-                            {budgetOk ? (
-                              <>
-                                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                                Lolos
-                              </>
-                            ) : (
-                              <>
-                                <AlertCircle className="w-5 h-5 text-red-500" />
-                                Tidak Lolos
-                              </>
-                            )}
-                          </div>
-                        </div>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          <div className="text-sm font-medium text-slate-500 mb-1">
-                            Penalti Diversifikasi
-                          </div>
-                          <div className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-                            <CheckCircle2 className="w-5 h-5 text-emerald-500" />{" "}
-                            {portfolio
-                              ? `${portfolio.n_active} Saham Aktif`
-                              : "Lolos"}
-                          </div>
-                        </div>
-                      </div>
+                      <PortfolioFitnessMetrics portfolio={portfolio} />
                     </CardContent>
                   </Card>
                 </div>
               </details>
             </div>
 
-            {/* LLM Narration */}
-            <div className="lg:col-span-1">
-              <details className="rounded-2xl border border-slate-200 bg-card px-4 py-3">
-                <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-                  Penjelasan strategi
-                </summary>
-                <div className="pt-3">
-                  <Card className="shadow-md border-0 bg-gradient-to-b from-blue-50/50 to-white relative overflow-hidden h-full">
-                    <div className="absolute top-0 right-0 p-6 opacity-5 pointer-events-none">
-                      <Bot className="w-48 h-48 text-blue-900" />
-                    </div>
-                    <CardHeader className="relative z-10 pb-4">
-                      <div className="bg-blue-100 w-12 h-12 rounded-xl flex items-center justify-center mb-4">
-                        <Bot className="w-6 h-6 text-blue-700" />
-                      </div>
-                      <CardTitle className="text-xl text-slate-900">
-                        Analisis Portofolio
-                      </CardTitle>
-                      <CardDescription className="text-slate-600 text-base">
-                        {portfolio?.rebalance_diagnostics?.narrative_source === "verified_template" ||
-                        portfolio?.rebalance_diagnostics?.narrative_source === "ga_template"
-                          ? "Penjelasan berdasarkan perhitungan GA"
-                          : "Makna hasil optimasi, fundamental saham, dan pertimbangan risikonya"}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="relative z-10">
-                      <div className="space-y-4">
-                        {portfolio ? (
-                          <p className="text-slate-700 leading-relaxed text-[15px] whitespace-pre-line">
-                            {portfolio.narasi_llm}
-                          </p>
-                        ) : (
-                          <p className="text-slate-700 leading-relaxed text-[15px]">
-                            Analisis tersedia setelah portofolio selesai dibuat.
-                          </p>
-                        )}
-                        <PortfolioNewsContext news={portfolio?.rebalance_diagnostics?.news_context} />
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              </details>
+            {/* Portfolio-level reasoning stays visible; stock metrics are optional. */}
+            <div className="lg:col-span-3">
+              <Card className="border-border bg-card shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-xl text-foreground">Memahami pilihan portofolio</CardTitle>
+                  <CardDescription>Pertimbangan kombinasi saham, arti metrik, dan risiko yang perlu Anda pahami.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {portfolio ? <PortfolioExplanation portfolio={portfolio}>
+                    <PortfolioNewsContext key={portfolio.id} portfolioId={portfolio.id}
+                      news={portfolio.rebalance_diagnostics?.news_context?.status === "unavailable"
+                        ? undefined : portfolio.rebalance_diagnostics?.news_context} />
+                  </PortfolioExplanation> :
+                    <p className="text-sm text-muted-foreground">Analisis tersedia setelah portofolio selesai dibuat.</p>}
+                </CardContent>
+              </Card>
             </div>
           </div>
         </>
@@ -2866,7 +2651,7 @@ export default function MyPortfolio() {
         <BearMarketDialog
           key={liveBearPreview.fingerprint}
           assessments={[liveBearPreview]}
-          initialPolicy={bearPolicy}
+          showNarrativeToggle
           capital={displayPerformance?.final_nav ?? portfolio?.budget}
           busy={isRunningRebalance}
           hidden={isRunningRebalance}
@@ -2880,9 +2665,10 @@ export default function MyPortfolio() {
       )}
       {seriesBearPreview && (
         <BearMarketDialog
+          key={seriesBearPreview.map((item) => item.fingerprint).join(":")}
           assessments={seriesBearPreview}
-          askRebalanceMethod
-          initialPolicy={bearPolicy}
+          backtest
+          showNarrativeToggle
           capital={effectivePerformance?.initial_capital ?? portfolio?.budget}
           busy={isRunningRebalance}
           hidden={isRunningRebalance}

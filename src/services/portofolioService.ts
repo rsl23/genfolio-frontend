@@ -13,8 +13,8 @@ import type {
   UpdateHargaBeliRequest,
   HargaBeliUpdateResult,
   BearMarketAssessment,
-  BearPolicy,
   DeletePortfolioResult,
+  PortfolioNewsContextData,
 } from "@/types";
 
 async function streamPortfolio<T>(path: string, body: unknown, onProgress: (progress: PortfolioProgress) => void, signal?: AbortSignal): Promise<ApiResponse<T>> {
@@ -43,16 +43,6 @@ async function streamPortfolio<T>(path: string, body: unknown, onProgress: (prog
  * Service khusus untuk endpoint-endpoint yang berhubungan dengan "Market"
  */
 export const portofolioService = {
-  getBearPolicy: async (): Promise<BearPolicy> => {
-    const response = await apiClient.get<ApiResponse<{ policy: BearPolicy }>>(
-      "/api/v1/portfolios/bear-policy",
-    );
-    if (!response.data.data) throw new Error("Preferensi alokasi modal tidak tersedia.");
-    return response.data.data.policy;
-  },
-  setBearPolicy: async (policy: BearPolicy): Promise<void> => {
-    await apiClient.patch("/api/v1/portfolios/bear-policy", { policy });
-  },
   previewBearMarket: async (params: {
     risk_profile: string; backtest: boolean; date_ref?: string;
   }): Promise<BearMarketAssessment> => {
@@ -81,6 +71,13 @@ export const portofolioService = {
    * berstatus `active_backtest` sehingga tidak mengubah portofolio live.
    *
    */
+  getPortfolioNews: async (portfolioId: string, signal?: AbortSignal): Promise<PortfolioNewsContextData> => {
+    const response = await apiClient.get<ApiResponse<PortfolioNewsContextData>>(
+      `/api/v1/portfolios/${portfolioId}/news`, { signal, timeout: 20000 },
+    );
+    if (!response.data.data) throw new Error(response.data.message || "Berita belum tersedia.");
+    return response.data.data;
+  },
   stockPortofolioGenerate: async (
     body: GeneratePortofolioRequest,
     onProgress?: (progress: PortfolioProgress) => void,

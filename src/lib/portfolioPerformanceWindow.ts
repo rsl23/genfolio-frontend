@@ -1,5 +1,6 @@
 import type { PortfolioData, PortfolioPerformance } from "@/types";
 import { calculateReturnMetrics } from "./portfolioReturnMetrics.ts";
+import { groupRebalanceSteps } from "./rebalanceSteps.ts";
 
 export interface PortfolioPerformanceWindow {
   data: PortfolioPerformance;
@@ -12,7 +13,7 @@ export interface PortfolioPerformanceWindow {
 const snapshotDay = (snapshot: PortfolioData) =>
   (snapshot.execution_date || snapshot.date_ref || snapshot.created_at).slice(0, 10);
 
-/** Setiap snapshot = masa berlaku komposisinya; overall = seluruh rantai. */
+/** One decision period includes its delayed executions; overall covers the full ledger. */
 export function selectPerformanceWindow(
   full: PortfolioPerformance,
   snapshots: PortfolioData[],
@@ -24,14 +25,15 @@ export function selectPerformanceWindow(
     evaluationPortfolioId: snapshots.at(-1)?.id ?? selectedId,
   };
   if (scope === "overall") return overallWindow;
-  const index = snapshots.findIndex((snapshot) => snapshot.id === selectedId);
+  const steps = groupRebalanceSteps(snapshots);
+  const index = steps.findIndex(step => step.snapshots.some(snapshot => snapshot.id === selectedId));
   if (index < 0) return overallWindow;
-  if (index === 0 && snapshots.length === 1) {
+  if (index === 0 && steps.length === 1) {
     return { data: full, isSegment: true, nextExecutionDate: null, evaluationPortfolioId: selectedId };
   }
 
-  const start = snapshotDay(snapshots[index]);
-  const nextExecutionDate = snapshots[index + 1] ? snapshotDay(snapshots[index + 1]) : null;
+  const start = snapshotDay(steps[index].initial);
+  const nextExecutionDate = steps[index + 1] ? snapshotDay(steps[index + 1].initial) : null;
   const windowPoints = full.series.filter((point) => {
     const day = point.date.slice(0, 10);
     return day >= start && (!nextExecutionDate || day < nextExecutionDate);

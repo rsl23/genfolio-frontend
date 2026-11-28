@@ -23,12 +23,10 @@ import { executionOptions } from "@/lib/portfolioExecutionPolicy";
 import { ArrowRight, Activity, AlertCircle, ArrowLeft } from "lucide-react";
 import type {
   GeneratePortofolioRequest,
-  FitnessPolicy,
   PortfolioMode,
   RiskProfile,
   BearChoice,
   BearMarketAssessment,
-  BearPolicy,
 } from "@/types";
 import questionsData from "@/data/questions.json";
 import { portofolioService } from "@/services/portofolioService";
@@ -206,7 +204,6 @@ export default function NewRecommendation() {
   const [bearPreview, setBearPreview] = useState<BearMarketAssessment | null>(
     null,
   );
-  const [bearPolicy, setBearPolicy] = useState<BearPolicy>("manual");
   // Profil risiko pilihan user jika override hasil kuis (null = pakai hasil kuis)
   const [overrideProfile, setOverrideProfile] = useState<RiskProfile>(null);
   // ===== Mode program: "live" (data pasar terbaru) / "backtest" (historis) =====
@@ -220,9 +217,6 @@ export default function NewRecommendation() {
     ),
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [fitnessPolicy] =
-    useState<FitnessPolicy>("legacy_cvar_v1");
-  const [profilePolicy, setProfilePolicy] = useState<"legacy" | "composition_v2">("legacy");
   const isBacktest = mode === "backtest";
   // date_ref wajib dan harus berada dalam rentang tanggal yang boleh dipilih
   // user (BACKTEST_PICKER_MIN..BACKTEST_PICKER_MAX) supaya GA tidak gagal
@@ -305,15 +299,11 @@ export default function NewRecommendation() {
     setIsPreviewing(true);
     setSubmitError(null);
     try {
-      const [policy, preview] = await Promise.all([
-        portofolioService.getBearPolicy(),
-        portofolioService.previewBearMarket({
+      const preview = await portofolioService.previewBearMarket({
           risk_profile: finalProfile ?? "Moderat",
           backtest: isBacktest,
           ...(isBacktest ? { date_ref: backtestDate } : {}),
-        }),
-      ]);
-      setBearPolicy(policy);
+        });
       setBearPreview(preview);
     } catch (error) {
       setSubmitError(describeApiError(error));
@@ -323,7 +313,6 @@ export default function NewRecommendation() {
   };
 
   const handleSubmit = async (
-    policy: BearPolicy,
     choices: Record<string, BearChoice>,
   ) => {
     if (!bearPreview) return;
@@ -352,7 +341,6 @@ export default function NewRecommendation() {
     });
 
     try {
-      if (policy !== bearPolicy) await portofolioService.setBearPolicy(policy);
       // Body mengikuti PortfolioGenerateRequest backend: mode backtest wajib
       // menyertakan date_ref; mode live tidak mengirim date_ref sama sekali.
       const apiPayload: GeneratePortofolioRequest = {
@@ -360,11 +348,10 @@ export default function NewRecommendation() {
         name_portofolio: portfolioName.trim(),
         description: portfolioDescription.trim() || null,
         risk_profile: finalProfile,
-        profile_policy: profilePolicy,
         answers: finalPayload,
         backtest: isBacktest,
         bear_management: true,
-        ...executionOptions(fitnessPolicy),
+        ...executionOptions(),
         bear_choice: choices[bearPreview.requested_date],
         bear_preview_as_of: bearPreview.as_of,
         bear_preview_fingerprint: bearPreview.fingerprint,
@@ -417,7 +404,6 @@ export default function NewRecommendation() {
             backtest: isBacktest,
             ...(isBacktest ? { date_ref: backtestDate } : {}),
           });
-          setBearPolicy(policy);
           setBearPreview(updated);
           setSubmitError(BEAR_PREVIEW_UPDATED);
         } catch (refreshError) {
@@ -543,26 +529,6 @@ export default function NewRecommendation() {
                       {portfolioDescription.length}/500
                     </p>
                   </div>
-                </div>
-
-                {/* <FitnessPolicySelect value={fitnessPolicy}
-                  onChange={setFitnessPolicy} disabled={isSubmitting || isPreviewing || bearPreview !== null} /> */}
-
-                <div className="space-y-2">
-                  <Label htmlFor="profile-policy">Metode profil risiko</Label>
-                  <select
-                    id="profile-policy"
-                    value={profilePolicy}
-                    onChange={(event) => setProfilePolicy(event.target.value as "legacy" | "composition_v2")}
-                    disabled={isSubmitting || isPreviewing}
-                    className="h-10 w-full rounded-lg border border-input bg-card px-3 text-sm"
-                  >
-                    <option value="legacy">Metode saat ini</option>
-                    <option value="composition_v2">Eksperimen: batas risiko berbeda per profil</option>
-                  </select>
-                  <p className="text-xs text-slate-500">
-                    Pada Composition v2, batas atas volatilitas porsi saham dibandingkan IHSG: Konservatif 110%, Moderat 125%, Agresif 150%. Tidak ada minimum volatilitas. Batas dinilai saat pemilihan; hasil return dan risiko selama investasi dapat berbeda.
-                  </p>
                 </div>
 
                 {/* Badge profil hasil kuis */}
@@ -859,7 +825,7 @@ export default function NewRecommendation() {
         <BearMarketDialog
           key={bearPreview.fingerprint}
           assessments={[bearPreview]}
-          initialPolicy={bearPolicy}
+          backtest={isBacktest}
           capital={parseRupiahInput(answers.capital)}
           busy={isSubmitting}
           hidden={isSubmitting}

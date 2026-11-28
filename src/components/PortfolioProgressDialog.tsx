@@ -78,7 +78,8 @@ export default function PortfolioProgressDialog({ store, preview = false, rebala
   const descriptionId = useId();
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const { current, scores, activities } = state;
-  const active = Math.max(0, steps.findIndex((step) => step.stages.includes(current.stage)));
+  const queued = current.stage === "queued";
+  const active = queued ? -1 : Math.max(0, steps.findIndex((step) => step.stages.includes(current.stage)));
   const latestScore = current.fitness ?? scores.at(-1)?.fitness;
 
   useEffect(() => {
@@ -118,10 +119,10 @@ export default function PortfolioProgressDialog({ store, preview = false, rebala
           <div>
             <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-700">{preview ? "Sebelum kita mulai" : rebalance ? "Saatnya menata kembali" : "Dirancang sesuai profil Anda"}</p>
             <h2 id={titleId} className="font-heading text-[1.6rem] leading-tight tracking-tight text-[#173e32] sm:text-[1.8rem]">
-              {preview ? "Mengenali kondisi pasar" : rebalance ? "Menata ulang portofolio Anda" : "Meracik portofolio Anda"}
+              {queued ? "Menunggu giliran analisis" : preview ? "Mengenali kondisi pasar" : rebalance ? "Menata ulang portofolio Anda" : "Meracik portofolio Anda"}
             </h2>
             <p id={descriptionId} className="mt-2 max-w-md text-xs leading-relaxed text-emerald-950/60 sm:text-sm">
-              {preview ? "Sebentar, kami meninjau indikator pasar sebelum Anda menentukan alokasi modal." : "Dari data menjadi keputusan. Ikuti setiap langkah analisis yang sedang kami siapkan untuk Anda."}
+              {queued ? "Permintaan Anda sudah diterima. Biarkan halaman ini terbuka; analisis akan dimulai otomatis saat giliran tersedia." : preview ? "Sebentar, kami meninjau indikator pasar sebelum Anda menentukan alokasi modal." : "Dari data menjadi keputusan. Ikuti setiap langkah analisis yang sedang kami siapkan untuk Anda."}
             </p>
           </div>
         </div>
@@ -151,7 +152,7 @@ export default function PortfolioProgressDialog({ store, preview = false, rebala
         <div role="status" aria-live="polite" aria-atomic="true" className="rounded-2xl border border-emerald-800/10 bg-white p-4">
           <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
             <span aria-hidden="true" className="inline-flex size-2 rounded-full bg-emerald-600" />
-            Sedang dikerjakan
+            {queued ? "Dalam antrean" : "Sedang dikerjakan"}
           </div>
           <h3 className="text-base font-semibold tracking-tight text-slate-800">{current.title}</h3>
           <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{current.detail}</p>

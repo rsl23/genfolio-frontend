@@ -19,7 +19,6 @@ export interface FitnessExperimentOptions {
   rebalance_sell_fee_rate?: number;
 }
 
-export type BearPolicy = "manual" | "always_follow" | "always_full";
 export type BearChoice = "recommended" | "full";
 
 export interface BearMarketAssessment {
@@ -67,6 +66,7 @@ export interface GeneratePortofolioRequest extends FitnessExperimentOptions {
   /** Tanggal acuan simulasi "YYYY-MM-DD" — WAJIB bila backtest = true. */
   date_ref?: string;
   rebalance?: boolean;
+  generate_llm_narrative?: boolean;
   rebalance_portfolio_id?: string;
   bear_management?: boolean;
   bear_choice?: BearChoice;
@@ -77,6 +77,7 @@ export interface GeneratePortofolioRequest extends FitnessExperimentOptions {
 /** Body POST /api/v1/portfolios/generate-rebalance-series. */
 export interface RebalanceSeriesGenerateRequest extends FitnessExperimentOptions {
   rebalance_model?: "legacy" | "guarded_v1";
+  generate_llm_narrative?: boolean;
   base_portfolio_id: string;
   budget: number;
   name_portofolio?: string;
@@ -119,6 +120,68 @@ export interface PortfolioNewsContextData {
   }>;
 }
 
+export interface GAFitnessMetrics {
+  fitness_mode: string;
+  is_rebalance: boolean;
+  lookthrough_stock_risk: boolean;
+  mdd_residual_weight: number | null;
+  score_sharpe: number | null;
+  mdd_risk_score: number | null;
+  risk_component: number | null;
+  market_stress_risk: number | null;
+  market_stress_coverage: number | null;
+  market_stress_missing_penalty: number | null;
+  momentum_score: number | null;
+  dividend_score: number | null;
+  dividend_bonus: number | null;
+  rebalance_utility: number | null;
+  turnover_rate: number | null;
+  roi_annual: number | null;
+  upside_signal?: number | null;
+  volatility_ratio?: number | null;
+  stock_volatility?: number | null;
+  benchmark_volatility?: number | null;
+  coefficients: Record<string, number | null>;
+  contributions?: Record<string, number | null>;
+  fundamentals: Array<{
+    ticker: string; weight: number | null; score: number | null;
+    per: number | null; pbv: number | null; roe: number | null;
+    der: number | null; dividend_yield: number | null;
+  }>;
+}
+
+export interface ExplanationMetric {
+  id: string;
+  label: string;
+  value: number;
+  unit: "percent" | "ratio" | "multiple" | "rupiah" | "percentage_point";
+  meaning: string;
+}
+
+export interface StockExplanation {
+  ticker: string;
+  weight: number | null;
+  weight_basis?: "capital" | "stock_basket";
+  description: string;
+  watchout: string;
+  metrics: ExplanationMetric[];
+}
+
+export interface PortfolioExplanationData {
+  version: "portfolio_explanation_v1" | "portfolio_explanation_v2";
+  summary: string;
+  reasons: Array<{ topic?: string; title: string; explanation: string; metric_ids: string[] }>;
+  risks: string[];
+  limitations: string[];
+  portfolio_metrics: ExplanationMetric[];
+  stocks: StockExplanation[];
+  conclusion: string;
+  disclaimer: string;
+  period?: { mulai: string | null; akhir: string | null } | null;
+  as_of?: string | null;
+  basis?: string | null;
+}
+
 export interface PortfolioData {
   price_date?: string | null;
   holdings_edited?: boolean;
@@ -134,9 +197,18 @@ export interface PortfolioData {
     cvar_penalty: number;
   } | null;
   transaction_costs?: number;
+  turnover_rate?: number | null;
+  turnover_penalty_beta?: number | null;
   rebalance_diagnostics?: {
+    explanation?: PortfolioExplanationData;
+    ga_metrics?: GAFitnessMetrics;
+    profile_policy?: string;
+    fitness_excludes_frozen_outside_universe?: boolean;
+    deferred_fill?: boolean;
+    execution_delta_lots?: Record<string, number>;
     model?: string;
     narrative_source?: "openai" | "groq" | "verified_template" | "ga_template";
+    narrative_requested?: boolean;
     news_context?: PortfolioNewsContextData;
     reason?: "hold" | "risk_repair" | "net_utility_gain";
     execution_transaction_costs?: number;
@@ -167,7 +239,7 @@ export interface PortfolioData {
   pending_deposit?: number;
   capital_contribution?: number;
   allocations: Array<PortofolioItem>;
-  narasi_llm: string;
+  narasi_llm: string | null;
   /**
    * Daftar perubahan posisi hasil rebalance (field baru backend).
    * Hanya ada bila portofolio dibuat dengan `rebalance = true`.

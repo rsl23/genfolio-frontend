@@ -1,48 +1,52 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { BearChoice, BearMarketAssessment, BearPolicy } from "@/types";
+import type { BearChoice, BearMarketAssessment } from "@/types";
 
 const keyFor = (item: BearMarketAssessment) =>
   item.scheduled_date ?? item.requested_date;
 
+type BacktestPolicy = "always_follow" | "always_full" | "manual";
+
 interface Props {
   assessments: BearMarketAssessment[];
-  initialPolicy: BearPolicy;
+  backtest?: boolean;
   capital?: number;
   busy: boolean;
   hidden?: boolean;
   error?: string | null;
-  askRebalanceMethod?: boolean;
+  showNarrativeToggle?: boolean;
   onClose: () => void;
   onConfirm: (
-    policy: BearPolicy,
     choices: Record<string, BearChoice>,
-    rebalanceMethod?: "legacy" | "composition_v2",
+    generateLlmNarrative: boolean,
   ) => Promise<void>;
 }
 
 export default function BearMarketDialog({
   assessments,
-  initialPolicy,
+  backtest = false,
   capital,
   busy,
   hidden = false,
   error,
-  askRebalanceMethod = false,
+  showNarrativeToggle = false,
   onClose,
   onConfirm,
 }: Props) {
-  const [policy, setPolicy] = useState<BearPolicy>(initialPolicy);
   const [choices, setChoices] = useState<Record<string, BearChoice>>({});
-  const [rebalanceMethod, setRebalanceMethod] = useState<"legacy" | "composition_v2" | null>(null);
-  const required = assessments.filter(
-    (item) =>
-      policy === "manual" ||
-      (policy === "always_follow" && item.status === "unknown"),
-  );
-  const incomplete = required.some(
+  const [policy, setPolicy] = useState<BacktestPolicy>("manual");
+  const [generateLlmNarrative, setGenerateLlmNarrative] = useState(true);
+  const manualChoices = !backtest || policy === "manual";
+  const incomplete = manualChoices && assessments.some(
     (item) => choices[keyFor(item)] === undefined,
-  );
+  ) || (backtest && policy === "always_follow" && assessments.some(
+    (item) => item.recommended_fraction === null,
+  ));
+  const selectedChoices = (): Record<string, BearChoice> =>
+    Object.fromEntries(assessments.map((item) => [
+      keyFor(item),
+      manualChoices ? choices[keyFor(item)] : policy === "always_full" ? "full" : "recommended",
+    ])) as Record<string, BearChoice>;
   const currency = (value: number) =>
     new Intl.NumberFormat("id-ID", {
       style: "currency",
@@ -59,52 +63,44 @@ export default function BearMarketDialog({
         className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
       >
         <h2 className="text-xl font-semibold">Saran alokasi</h2>
-        <fieldset
-          disabled={busy}
-          className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm"
-        >
-          <legend className="mb-1 font-medium">Kebijakan akun</legend>
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="radio"
-              name="bear-policy"
-              checked={policy === "always_follow"}
-              onChange={() => setPolicy("always_follow")}
-            />
-            Selalu ikuti saran
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="radio"
-              name="bear-policy"
-              checked={policy === "always_full"}
-              onChange={() => setPolicy("always_full")}
-            />
-            Selalu 100% modal
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="radio"
-              name="bear-policy"
-              checked={policy === "manual"}
-              onChange={() => setPolicy("manual")}
-            />
-            Pilih manual
-          </label>
-        </fieldset>
-        {assessments.some((item) => item.execution_date !== null) &&
-          policy === "manual" && (
-            <p className="mt-2 text-xs text-amber-800">
-              Pilihan untuk tanggal historis hanya simulasi.
-            </p>
-          )}
+        {backtest ? (
+          <fieldset disabled={busy} className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm">
+            <legend className="mb-1 font-medium">Pilihan alokasi backtest ini</legend>
+            <label className="inline-flex items-center gap-2">
+              <input type="radio" name="backtest-bear-policy" checked={policy === "always_follow"}
+                onChange={() => setPolicy("always_follow")} />
+              Selalu ikuti saran
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input type="radio" name="backtest-bear-policy" checked={policy === "always_full"}
+                onChange={() => setPolicy("always_full")} />
+              Selalu 100% modal
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input type="radio" name="backtest-bear-policy" checked={policy === "manual"}
+                onChange={() => setPolicy("manual")} />
+              Manual per tanggal
+            </label>
+          </fieldset>
+        ) : (
+          <p className="mt-2 text-sm text-slate-600">
+            Pilih alokasi modal untuk rekomendasi ini.
+          </p>
+        )}
+        {backtest && policy === "always_follow" && assessments.some((item) => item.recommended_fraction === null) && (
+          <p className="mt-2 text-sm text-amber-800">
+            Saran belum tersedia untuk semua tanggal. Pilih 100% modal atau manual per tanggal.
+          </p>
+        )}
+        {assessments.some((item) => item.execution_date !== null) && (
+          <p className="mt-2 text-xs text-amber-800">
+            Pilihan untuk tanggal historis hanya simulasi.
+          </p>
+        )}
         <div className="mt-4 space-y-3">
           {assessments.map((item) => {
             const key = keyFor(item);
             const fraction = item.recommended_fraction;
-            const needsChoice =
-              policy === "manual" ||
-              (policy === "always_follow" && item.status === "unknown");
             return (
               <div key={key} className="rounded-xl border p-3 text-sm">
                 <div className="flex flex-wrap justify-between gap-2 font-medium">
@@ -141,22 +137,17 @@ export default function BearMarketDialog({
                     )}
                   </div>
                 )}
-                {policy === "always_full" && (
-                  <p className="mt-2 font-medium text-primary">
-                    Pilihan akun: gunakan 100% modal.
-                  </p>
-                )}
-                {fraction === null && policy !== "always_full" && (
+                {fraction === null && (
                   <p className="mt-2 text-amber-800">
                     Belum ada saran alokasi; pilih 100% untuk lanjut.
                   </p>
                 )}
-                {needsChoice && (
-                  <div className="mt-2 flex flex-wrap gap-4">
+                {manualChoices ? <div className="mt-2 flex flex-wrap gap-4">
                     {fraction !== null && (
                       <label className="inline-flex items-center gap-2">
                         <input
                           type="radio"
+                          disabled={busy}
                           name={key}
                           checked={choices[key] === "recommended"}
                           onChange={() =>
@@ -172,6 +163,7 @@ export default function BearMarketDialog({
                     <label className="inline-flex items-center gap-2">
                       <input
                         type="radio"
+                        disabled={busy}
                         name={key}
                         checked={choices[key] === "full"}
                         onChange={() =>
@@ -180,34 +172,37 @@ export default function BearMarketDialog({
                       />
                       Gunakan 100%
                     </label>
-                  </div>
+                </div> : (
+                  <p className="mt-2 font-medium text-primary">
+                    {policy === "always_full" ? "Pilihan: gunakan 100% modal." : "Pilihan: ikuti saran."}
+                  </p>
                 )}
               </div>
             );
           })}
         </div>
-        {askRebalanceMethod && (
-          <fieldset disabled={busy} className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
-            <legend className="px-1 font-semibold">Metode untuk setiap rebalance</legend>
-            <p className="mb-3 text-xs text-slate-600">
-              Pilih sebelum menjalankan series. Pilihan ini berlaku untuk semua tanggal rebalance berikutnya; snapshot awal tetap seperti tersimpan.
-            </p>
-            <div className="space-y-2">
-              <label className="flex items-start gap-2">
-                <input type="radio" name="series-rebalance-method" checked={rebalanceMethod === "legacy"}
-                  onChange={() => setRebalanceMethod("legacy")} className="mt-1" />
-                <span><strong>Legacy CVaR</strong> — fitness return, drawdown, dan CVaR yang saat ini digunakan.</span>
-              </label>
-              <label className="flex items-start gap-2">
-                <input type="radio" name="series-rebalance-method" checked={rebalanceMethod === "composition_v2"}
-                  onChange={() => setRebalanceMethod("composition_v2")} className="mt-1" />
-                <span><strong>Composition v2</strong> — fitness Legacy CVaR ditambah batas komposisi dan volatilitas relatif IHSG pada tiap rebalance.</span>
-              </label>
-            </div>
-            <p className="mt-3 text-xs text-slate-600">
-              Batas atas volatilitas porsi saham relatif IHSG: Konservatif 110%, Moderat 125%, Agresif 150%. Tidak ada minimum volatilitas, sehingga kombinasi yang lebih tenang tetap dapat dipilih. Dinilai pada setiap keputusan rebalance; hasil return dan risiko sepanjang backtest dapat berbeda. Kas ikut memengaruhi risiko total portofolio.
-            </p>
-          </fieldset>
+        {showNarrativeToggle && (
+          <label className="mt-4 flex cursor-pointer items-start justify-between gap-4 rounded-xl border px-3 py-3 text-sm">
+            <span>
+              <span className="block font-medium">Narasi LLM</span>
+              <span className="text-xs text-slate-600">
+                Jika dimatikan, hasil rebalance menampilkan ringkasan dari GA.
+              </span>
+            </span>
+            <span className="relative mt-0.5 inline-flex shrink-0">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-label="Narasi LLM"
+                className="peer sr-only"
+                checked={generateLlmNarrative}
+                onChange={(event) => setGenerateLlmNarrative(event.target.checked)}
+                disabled={busy}
+              />
+              <span className="h-6 w-11 rounded-full bg-slate-300 peer-checked:bg-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-disabled:opacity-50" />
+              <span className="pointer-events-none absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-5" />
+            </span>
+          </label>
         )}
         {error && (
           <p role="alert" className="mt-3 text-sm text-red-700">
@@ -220,20 +215,9 @@ export default function BearMarketDialog({
           </Button>
           <Button
             onClick={() =>
-              void onConfirm(
-                policy,
-                policy === "always_full"
-                  ? Object.fromEntries(
-                      assessments.map((item) => [
-                        keyFor(item),
-                        "full" as BearChoice,
-                      ]),
-                    )
-                  : choices,
-                askRebalanceMethod ? rebalanceMethod ?? undefined : undefined,
-              )
+              void onConfirm(selectedChoices(), generateLlmNarrative)
             }
-            disabled={busy || incomplete || (askRebalanceMethod && rebalanceMethod === null)}
+            disabled={busy || incomplete}
           >
             {busy ? "Menjalankan..." : "Konfirmasi dan jalankan"}
           </Button>

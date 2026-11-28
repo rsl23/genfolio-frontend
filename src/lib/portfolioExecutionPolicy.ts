@@ -1,10 +1,9 @@
-import type { FitnessExperimentOptions, FitnessPolicy } from "../types/index.ts";
+import type { FitnessExperimentOptions } from "../types/index.ts";
 
 /** Shared defaults for initial generation, live rebalance and backtest series. */
-export const DEFAULT_FITNESS_POLICY: FitnessPolicy = "legacy_cvar_v1";
-export const executionOptions = (fitness: FitnessPolicy = DEFAULT_FITNESS_POLICY, guarded = false): FitnessExperimentOptions & { rebalance_model: "legacy" | "guarded_v1" } => ({
-  fitness_policy: fitness,
-  rebalance_model: guarded ? "guarded_v1" : "legacy",
+export const executionOptions = (): FitnessExperimentOptions => ({
+  profile_policy: "composition_v2",
+  fitness_policy: "legacy_cvar_v1",
   charge_transaction_fees: true,
   fitness_horizon_days: 63,
   fitness_cvar_tail_fraction: .1,

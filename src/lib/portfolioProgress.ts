@@ -1,9 +1,10 @@
-export type AnalysisStage = "preparing" | "market" | "analyzing" | "optimizing" | "allocating" | "narrative" | "saving" | "skipped";
+export type AnalysisStage = "queued" | "preparing" | "market" | "analyzing" | "optimizing" | "allocating" | "narrative" | "saving" | "skipped";
 
 export interface PortfolioProgress {
   stage: AnalysisStage;
   title: string;
   detail: string;
+  queue_position?: number;
   generation?: number;
   total_generations?: number;
   fitness?: number | null;

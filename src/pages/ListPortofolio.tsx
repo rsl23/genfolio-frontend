@@ -9,6 +9,7 @@ import PortfolioModeToggle from "@/components/PortfolioModeToggle";
 import { getBacktestDateRef, getPortfolioMode, setBacktestDateRef, setCachedPortfolio, setPortfolioMode } from "@/lib/portfolioMode";
 import { groupPortfolioSeries, type PortfolioSeries } from "@/lib/portfolioSeries";
 import { selectPerformanceWindow } from "@/lib/portfolioPerformanceWindow";
+import { groupRebalanceSteps } from "@/lib/rebalanceSteps";
 import { filterPortfolioSeries, isPortfolioSeriesActive, portfolioTickers, sortPortfolioSeries, type PortfolioListSort } from "@/lib/portfolioListFilters";
 import { portofolioService } from "@/services/portofolioService";
 import type { PortfolioData, PortfolioMode, PortfolioPerformance } from "@/types";
@@ -189,7 +190,7 @@ export default function ListPortofolio() {
     const portfolio = item.root;
     const name = portfolio.name_portofolio?.trim() || `Portofolio ${portfolio.risk_profile}`;
     if (!window.confirm(
-      `Hapus “${name}” beserta ${item.snapshots.length - 1} portofolio hasil rebalance dan semua item sahamnya?\n\nTindakan ini tidak dapat dibatalkan.`,
+      `Hapus “${name}” beserta ${groupRebalanceSteps(item.snapshots).length - 1} rebalance, transaksi tertunda, dan semua item sahamnya?\n\nTindakan ini tidak dapat dibatalkan.`,
     )) return;
 
     setDeletingId(portfolio.id);
@@ -357,7 +358,7 @@ export default function ListPortofolio() {
                 <article key={portfolio.id} className="flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-card p-5 shadow-sm transition hover:border-primary/30 hover:shadow-md">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs text-slate-500">{isBacktest ? "Simulasi" : "Live"} sejak {formatDate(portfolio.execution_date || portfolio.date_ref || portfolio.created_at)} · {item.snapshots.length - 1} rebalance</p>
+                      <p className="text-xs text-slate-500">{isBacktest ? "Simulasi" : "Live"} sejak {formatDate(portfolio.execution_date || portfolio.date_ref || portfolio.created_at)} · {groupRebalanceSteps(item.snapshots).length - 1} rebalance</p>
                       <h2 className="mt-1 truncate text-lg font-semibold text-slate-900" title={name}>{name}</h2>
                     </div>
                     <button type="button" role="switch" aria-checked={active}

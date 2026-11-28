@@ -1,4 +1,6 @@
 import type { PortfolioNewsContextData } from "@/types";
+import { useEffect, useState } from "react";
+import { portofolioService } from "@/services/portofolioService";
 
 const dateLabel = (value: string) => {
   const date = new Date(value);
@@ -14,13 +16,32 @@ function safeLink(value: string): string | undefined {
   } catch { return undefined; }
 }
 
-export default function PortfolioNewsContext({ news }: { news?: PortfolioNewsContextData }) {
-  if (!news || news.status === "disabled") return null;
-  return <details className="border-t border-blue-100 pt-4" aria-label="Konteks berita emiten">
+export default function PortfolioNewsContext({ news: savedNews, portfolioId }: {
+  news?: PortfolioNewsContextData;
+  portfolioId: string;
+}) {
+  const [news, setNews] = useState(savedNews);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || news || error) return;
+    const controller = new AbortController();
+    portofolioService.getPortfolioNews(portfolioId, controller.signal).then(setNews).catch(() => {
+      if (!controller.signal.aborted) setError("Berita belum dapat dimuat.");
+    });
+    return () => controller.abort();
+  }, [open, news, error, portfolioId]);
+  if (news?.status === "disabled") return null;
+  return <details className="border-t border-blue-100 pt-4" aria-label="Konteks berita emiten"
+    onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-      Konteks berita emiten{news.items.length ? ` · ${news.items.length} sumber` : " · belum tersedia"}
+      Konteks berita emiten{news?.items.length ? ` · ${news.items.length} sumber` : ""}
     </summary>
     <div className="mt-3 space-y-3">
+    {!news ? <p className="text-sm text-slate-600">
+      {error || "Memuat berita emiten..."}
+      {error && <button type="button" className="ml-2 underline" onClick={() => setError(null)}>Coba lagi</button>}
+    </p> : <>
     <p className="text-sm leading-relaxed text-slate-600">
       Informasi tambahan di luar analisis utama. Berita ini tidak menjadi alasan pemilihan saham oleh GA.
     </p>
@@ -46,6 +67,7 @@ export default function PortfolioNewsContext({ news }: { news?: PortfolioNewsCon
     </> : <p className="text-sm leading-relaxed text-slate-600">
       {news.reason || "Konteks berita historis belum tersedia untuk saham dan tanggal ini."} Ketiadaan hasil tidak berarti tidak ada peristiwa terkait.
     </p>}
+    </>}
     </div>
   </details>;
 }
